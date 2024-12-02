@@ -4,20 +4,25 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Please see LICENSE in the repository root for full details.
 
+import { queryOptions } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { zodSearchValidator } from "@tanstack/router-zod-adapter";
 import * as z from "zod";
-
 import { graphql } from "../gql";
+import { graphqlRequest } from "../graphql";
 
-export const QUERY = graphql(/* GraphQL */ `
-  query PasswordRecoveryQuery {
+const QUERY = graphql(/* GraphQL */ `
+  query PasswordRecovery {
     siteConfig {
-      id
       ...PasswordCreationDoubleInput_siteConfig
     }
   }
 `);
+
+export const query = queryOptions({
+  queryKey: ["passwordRecovery"],
+  queryFn: ({ signal }) => graphqlRequest({ query: QUERY, signal }),
+});
 
 const schema = z.object({
   ticket: z.string(),
@@ -26,12 +31,5 @@ const schema = z.object({
 export const Route = createFileRoute("/password/recovery/")({
   validateSearch: zodSearchValidator(schema),
 
-  async loader({ context, abortController: { signal } }) {
-    const queryResult = await context.client.query(
-      QUERY,
-      {},
-      { fetchOptions: { signal } },
-    );
-    if (queryResult.error) throw queryResult.error;
-  },
+  loader: ({ context }) => context.queryClient.ensureQueryData(query),
 });

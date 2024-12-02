@@ -4,34 +4,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Please see LICENSE in the repository root for full details.
 
-use std::{
-    collections::HashMap,
-    num::NonZeroU32,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, num::NonZeroU32};
 
 use assert_matches::assert_matches;
-use chrono::Duration;
 use mas_iana::oauth::{
     OAuthAccessTokenType, OAuthClientAuthenticationMethod, PkceCodeChallengeMethod,
 };
 use mas_jose::{claims::ClaimError, jwk::PublicJsonWebKeySet};
 use mas_oidc_client::{
-    error::{
-        AuthorizationError, IdTokenError, PushedAuthorizationError, TokenAuthorizationCodeError,
-    },
+    error::{IdTokenError, TokenAuthorizationCodeError},
     requests::{
         authorization_code::{
             access_token_with_authorization_code, build_authorization_url,
-            build_par_authorization_url, AuthorizationRequestData, AuthorizationValidationData,
+            AuthorizationRequestData, AuthorizationValidationData,
         },
         jose::JwtVerificationData,
     },
-    types::scope::{ScopeExt, ScopeToken},
 };
-use oauth2_types::requests::{AccessTokenResponse, Display, Prompt, PushedAuthorizationResponse};
+use oauth2_types::{
+    requests::{AccessTokenResponse, Display, Prompt},
+    scope::OPENID,
+};
 use rand::SeedableRng;
-use tokio::sync::oneshot;
 use url::Url;
 use wiremock::{
     matchers::{method, path},
@@ -40,7 +34,7 @@ use wiremock::{
 
 use crate::{
     client_credentials, id_token, init_test, now, ACCESS_TOKEN, AUTHORIZATION_CODE, CLIENT_ID,
-    CODE_VERIFIER, ID_TOKEN_SIGNING_ALG, NONCE, REDIRECT_URI, REQUEST_URI,
+    CODE_VERIFIER, ID_TOKEN_SIGNING_ALG, NONCE, REDIRECT_URI,
 };
 
 #[test]
@@ -54,7 +48,7 @@ fn pass_authorization_url() {
         authorization_endpoint,
         AuthorizationRequestData::new(
             CLIENT_ID.to_owned(),
-            [ScopeToken::Openid].into_iter().collect(),
+            [OPENID].into_iter().collect(),
             redirect_uri,
         )
         .with_code_challenge_methods_supported(vec![PkceCodeChallengeMethod::S256]),
@@ -97,7 +91,7 @@ fn pass_full_authorization_url() {
 
     let authorization_data = AuthorizationRequestData::new(
         CLIENT_ID.to_owned(),
-        [ScopeToken::Openid].into_iter().collect(),
+        [OPENID].into_iter().collect(),
         Url::parse(REDIRECT_URI).unwrap(),
     )
     .with_display(Display::Touch)
@@ -135,115 +129,6 @@ fn pass_full_authorization_url() {
     assert_eq!(query_pairs.get("nonce").unwrap(), "ox0PigY5l9xl5uTL");
     assert_eq!(query_pairs.get("code_challenge"), None);
     assert_eq!(query_pairs.get("code_challenge_method"), None);
-}
-
-#[tokio::test]
-async fn pass_pushed_authorization_request() {
-    let (http_service, mock_server, issuer) = init_test().await;
-    let client_credentials =
-        client_credentials(&OAuthClientAuthenticationMethod::None, &issuer, None);
-    let authorization_endpoint = issuer.join("authorize").unwrap();
-    let par_endpoint = issuer.join("par").unwrap();
-    let redirect_uri = Url::parse(REDIRECT_URI).unwrap();
-    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
-
-    let (sender, receiver) = oneshot::channel();
-    let sender_mutex = Arc::new(Mutex::new(Some(sender)));
-
-    Mock::given(method("POST"))
-        .and(path("/par"))
-        .and(move |req: &Request| {
-            let body = form_urlencoded::parse(&req.body)
-                .into_owned()
-                .collect::<HashMap<_, _>>();
-            if let Some(sender) = sender_mutex.lock().unwrap().take() {
-                sender.send(body).unwrap();
-                true
-            } else {
-                false
-            }
-        })
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(PushedAuthorizationResponse {
-                request_uri: REQUEST_URI.to_owned(),
-                expires_in: Duration::microseconds(30 * 1000 * 1000),
-            }),
-        )
-        .mount(&mock_server)
-        .await;
-
-    let (url, validation_data) = build_par_authorization_url(
-        &http_service,
-        client_credentials,
-        &par_endpoint,
-        authorization_endpoint,
-        AuthorizationRequestData::new(
-            CLIENT_ID.to_owned(),
-            [ScopeToken::Openid].into_iter().collect(),
-            redirect_uri,
-        )
-        .with_code_challenge_methods_supported(vec![PkceCodeChallengeMethod::S256]),
-        now(),
-        &mut rng,
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(validation_data.state, "OrJ8xbWovSpJUTKz");
-    assert_eq!(
-        validation_data.code_challenge_verifier.unwrap(),
-        "TSgZ_hr3TJPjhq4aDp34K_8ksjLwaa1xDcPiRGBcjhM"
-    );
-
-    let request_pairs = receiver.await.unwrap();
-
-    assert_eq!(url.path(), "/authorize");
-    let query_pairs = url.query_pairs().collect::<HashMap<_, _>>();
-    assert_eq!(query_pairs.get("request_uri").unwrap(), REQUEST_URI,);
-    assert_eq!(query_pairs.get("client_id").unwrap(), CLIENT_ID);
-
-    assert_eq!(request_pairs.get("scope").unwrap(), "openid");
-    assert_eq!(request_pairs.get("response_type").unwrap(), "code");
-    assert_eq!(request_pairs.get("client_id").unwrap(), CLIENT_ID);
-    assert_eq!(request_pairs.get("redirect_uri").unwrap(), REDIRECT_URI);
-    assert_eq!(*request_pairs.get("state").unwrap(), validation_data.state);
-    assert_eq!(request_pairs.get("nonce").unwrap(), "ox0PigY5l9xl5uTL");
-    let code_challenge = request_pairs.get("code_challenge").unwrap();
-    assert!(code_challenge.len() >= 43);
-    assert_eq!(request_pairs.get("code_challenge_method").unwrap(), "S256");
-}
-
-#[tokio::test]
-async fn fail_pushed_authorization_request_404() {
-    let (http_service, _, issuer) = init_test().await;
-    let client_credentials =
-        client_credentials(&OAuthClientAuthenticationMethod::None, &issuer, None);
-    let authorization_endpoint = issuer.join("authorize").unwrap();
-    let par_endpoint = issuer.join("par").unwrap();
-    let redirect_uri = Url::parse(REDIRECT_URI).unwrap();
-    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
-
-    let error = build_par_authorization_url(
-        &http_service,
-        client_credentials,
-        &par_endpoint,
-        authorization_endpoint,
-        AuthorizationRequestData::new(
-            CLIENT_ID.to_owned(),
-            [ScopeToken::Openid].into_iter().collect(),
-            redirect_uri,
-        )
-        .with_code_challenge_methods_supported(vec![PkceCodeChallengeMethod::S256]),
-        now(),
-        &mut rng,
-    )
-    .await
-    .unwrap_err();
-
-    assert_matches!(
-        error,
-        AuthorizationError::PushedAuthorization(PushedAuthorizationError::Http(_))
-    );
 }
 
 /// Check if the given request to the token endpoint is valid.
@@ -293,9 +178,8 @@ fn is_valid_token_endpoint_request(req: &Request) -> bool {
 
 #[tokio::test]
 async fn pass_access_token_with_authorization_code() {
-    let (http_service, mock_server, issuer) = init_test().await;
-    let client_credentials =
-        client_credentials(&OAuthClientAuthenticationMethod::None, &issuer, None);
+    let (http_client, mock_server, issuer) = init_test().await;
+    let client_credentials = client_credentials(&OAuthClientAuthenticationMethod::None, &issuer);
     let token_endpoint = issuer.join("token").unwrap();
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
@@ -325,14 +209,14 @@ async fn pass_access_token_with_authorization_code() {
                 id_token: Some(id_token.to_string()),
                 token_type: OAuthAccessTokenType::Bearer,
                 expires_in: None,
-                scope: Some([ScopeToken::Openid].into_iter().collect()),
+                scope: Some([OPENID].into_iter().collect()),
             }),
         )
         .mount(&mock_server)
         .await;
 
     let (response, response_id_token) = access_token_with_authorization_code(
-        &http_service,
+        &http_client,
         client_credentials,
         &token_endpoint,
         AUTHORIZATION_CODE.to_owned(),
@@ -346,15 +230,14 @@ async fn pass_access_token_with_authorization_code() {
 
     assert_eq!(response.access_token, ACCESS_TOKEN);
     assert_eq!(response.refresh_token, None);
-    assert!(response.scope.unwrap().contains_token(&ScopeToken::Openid));
+    assert!(response.scope.unwrap().contains("openid"));
     assert_eq!(response_id_token.unwrap().as_str(), id_token.as_str());
 }
 
 #[tokio::test]
 async fn fail_access_token_with_authorization_code_wrong_nonce() {
-    let (http_service, mock_server, issuer) = init_test().await;
-    let client_credentials =
-        client_credentials(&OAuthClientAuthenticationMethod::None, &issuer, None);
+    let (http_client, mock_server, issuer) = init_test().await;
+    let client_credentials = client_credentials(&OAuthClientAuthenticationMethod::None, &issuer);
     let token_endpoint = issuer.join("token").unwrap();
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
@@ -384,14 +267,14 @@ async fn fail_access_token_with_authorization_code_wrong_nonce() {
                 id_token: Some(id_token.into_string()),
                 token_type: OAuthAccessTokenType::Bearer,
                 expires_in: None,
-                scope: Some([ScopeToken::Openid].into_iter().collect()),
+                scope: Some([OPENID].into_iter().collect()),
             }),
         )
         .mount(&mock_server)
         .await;
 
     let error = access_token_with_authorization_code(
-        &http_service,
+        &http_client,
         client_credentials,
         &token_endpoint,
         AUTHORIZATION_CODE.to_owned(),
@@ -414,9 +297,8 @@ async fn fail_access_token_with_authorization_code_wrong_nonce() {
 
 #[tokio::test]
 async fn fail_access_token_with_authorization_code_no_id_token() {
-    let (http_service, mock_server, issuer) = init_test().await;
-    let client_credentials =
-        client_credentials(&OAuthClientAuthenticationMethod::None, &issuer, None);
+    let (http_client, mock_server, issuer) = init_test().await;
+    let client_credentials = client_credentials(&OAuthClientAuthenticationMethod::None, &issuer);
     let token_endpoint = issuer.join("token").unwrap();
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
@@ -446,14 +328,14 @@ async fn fail_access_token_with_authorization_code_no_id_token() {
                 id_token: None,
                 token_type: OAuthAccessTokenType::Bearer,
                 expires_in: None,
-                scope: Some([ScopeToken::Openid].into_iter().collect()),
+                scope: Some([OPENID].into_iter().collect()),
             }),
         )
         .mount(&mock_server)
         .await;
 
     let error = access_token_with_authorization_code(
-        &http_service,
+        &http_client,
         client_credentials,
         &token_endpoint,
         AUTHORIZATION_CODE.to_owned(),

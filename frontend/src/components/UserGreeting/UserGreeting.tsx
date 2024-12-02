@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Please see LICENSE in the repository root for full details.
 
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import IconClose from "@vector-im/compound-design-tokens/assets/web/icons/close";
 import IconEdit from "@vector-im/compound-design-tokens/assets/web/icons/edit";
 import {
@@ -21,13 +22,10 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { useMutation } from "urql";
-
 import { type FragmentType, graphql, useFragment } from "../../gql";
-import { SetDisplayNameStatus } from "../../gql/graphql";
+import { graphqlRequest } from "../../graphql";
 import * as Dialog from "../Dialog";
 import LoadingSpinner from "../LoadingSpinner";
-
 import styles from "./UserGreeting.module.css";
 
 export const FRAGMENT = graphql(/* GraphQL */ `
@@ -42,7 +40,6 @@ export const FRAGMENT = graphql(/* GraphQL */ `
 
 export const CONFIG_FRAGMENT = graphql(/* GraphQL */ `
   fragment UserGreeting_siteConfig on SiteConfig {
-    id
     displayNameChangeAllowed
   }
 `);
@@ -51,12 +48,6 @@ const SET_DISPLAYNAME_MUTATION = graphql(/* GraphQL */ `
   mutation SetDisplayName($userId: ID!, $displayName: String) {
     setDisplayName(input: { userId: $userId, displayName: $displayName }) {
       status
-      user {
-        id
-        matrix {
-          displayName
-        }
-      }
     }
   }
 `);
@@ -88,28 +79,38 @@ const UserGreeting: React.FC<Props> = ({ user, siteConfig }) => {
   const fieldRef = useRef<HTMLInputElement>(null);
   const data = useFragment(FRAGMENT, user);
   const { displayNameChangeAllowed } = useFragment(CONFIG_FRAGMENT, siteConfig);
+  const queryClient = useQueryClient();
 
-  const [setDisplayNameResult, setDisplayName] = useMutation(
-    SET_DISPLAYNAME_MUTATION,
-  );
+  const setDisplayName = useMutation({
+    mutationFn: ({
+      userId,
+      displayName,
+    }: {
+      userId: string;
+      displayName: string | null;
+    }) =>
+      graphqlRequest({
+        query: SET_DISPLAYNAME_MUTATION,
+        variables: { userId, displayName },
+      }),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["currentUserGreeting"] });
+      if (data.setDisplayName.status === "SET") {
+        setOpen(false);
+      }
+    },
+  });
 
   const [open, setOpen] = useState(false);
   const { t } = useTranslation();
 
-  const onSubmit = async (
-    event: React.FormEvent<HTMLFormElement>,
-  ): Promise<void> => {
+  const onSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
 
     const form = event.currentTarget;
     const formData = new FormData(form);
     const displayName = (formData.get("displayname") as string) || null;
-
-    const result = await setDisplayName({ displayName, userId: data.id });
-
-    if (result.data?.setDisplayName.status === SetDisplayNameStatus.Set) {
-      setOpen(false);
-    }
+    setDisplayName.mutate({ displayName, userId: data.id });
   };
 
   return (
@@ -163,8 +164,7 @@ const UserGreeting: React.FC<Props> = ({ user, siteConfig }) => {
               <Form.Field
                 name="displayname"
                 serverInvalid={
-                  setDisplayNameResult.data?.setDisplayName.status ===
-                  SetDisplayNameStatus.Invalid
+                  setDisplayName.data?.setDisplayName.status === "INVALID"
                 }
               >
                 <Form.Label>
@@ -199,8 +199,8 @@ const UserGreeting: React.FC<Props> = ({ user, siteConfig }) => {
               </Form.Field>
             </div>
 
-            <Form.Submit disabled={setDisplayNameResult.fetching}>
-              {setDisplayNameResult.fetching && <LoadingSpinner inline />}
+            <Form.Submit disabled={setDisplayName.isPending}>
+              {setDisplayName.isPending && <LoadingSpinner inline />}
               {t("action.save")}
             </Form.Submit>
           </Form.Root>

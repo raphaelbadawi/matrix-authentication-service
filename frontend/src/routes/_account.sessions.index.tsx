@@ -4,18 +4,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Please see LICENSE in the repository root for full details.
 
-import { createFileRoute, notFound } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { zodSearchValidator } from "@tanstack/router-zod-adapter";
 import * as z from "zod";
 
+import { queryOptions } from "@tanstack/react-query";
 import { graphql } from "../gql";
-import { anyPaginationSchema, normalizePagination } from "../pagination";
+import { graphqlRequest } from "../graphql";
+import {
+  type AnyPagination,
+  anyPaginationSchema,
+  normalizePagination,
+} from "../pagination";
 import { getNinetyDaysAgo } from "../utils/dates";
 
 const PAGE_SIZE = 6;
 
-export const QUERY = graphql(/* GraphQL */ `
-  query SessionsOverviewQuery {
+const QUERY = graphql(/* GraphQL */ `
+  query SessionsOverview {
     viewer {
       __typename
 
@@ -27,8 +33,13 @@ export const QUERY = graphql(/* GraphQL */ `
   }
 `);
 
-export const LIST_QUERY = graphql(/* GraphQL */ `
-  query AppSessionsListQuery(
+export const query = queryOptions({
+  queryKey: ["sessionsOverview"],
+  queryFn: ({ signal }) => graphqlRequest({ query: QUERY, signal }),
+});
+
+const LIST_QUERY = graphql(/* GraphQL */ `
+  query AppSessionsList(
     $before: String
     $after: String
     $first: Int
@@ -70,6 +81,23 @@ export const LIST_QUERY = graphql(/* GraphQL */ `
   }
 `);
 
+export const listQuery = (
+  pagination: AnyPagination,
+  inactive: true | undefined,
+) =>
+  queryOptions({
+    queryKey: ["appSessionList", inactive, pagination],
+    queryFn: ({ signal }) =>
+      graphqlRequest({
+        query: LIST_QUERY,
+        variables: {
+          lastActive: inactive ? { before: getNinetyDaysAgo() } : undefined,
+          ...pagination,
+        },
+        signal,
+      }),
+  });
+
 const searchSchema = z
   .object({
     inactive: z.literal(true).optional(),
@@ -84,26 +112,9 @@ export const Route = createFileRoute("/_account/sessions/")({
     pagination: normalizePagination(pagination, PAGE_SIZE, "backward"),
   }),
 
-  async loader({
-    context,
-    deps: { inactive, pagination },
-    abortController: { signal },
-  }) {
-    const variables = {
-      lastActive: inactive ? { before: getNinetyDaysAgo() } : undefined,
-      ...pagination,
-    };
-
-    const [overview, list] = await Promise.all([
-      context.client.query(QUERY, {}, { fetchOptions: { signal } }),
-      context.client.query(LIST_QUERY, variables, {
-        fetchOptions: { signal },
-      }),
-    ]);
-
-    if (overview.error) throw overview.error;
-    if (list.error) throw list.error;
-    if (overview.data?.viewer?.__typename !== "User") throw notFound();
-    if (list.data?.viewer?.__typename !== "User") throw notFound();
-  },
+  loader: ({ context, deps: { inactive, pagination } }) =>
+    Promise.all([
+      context.queryClient.ensureQueryData(query),
+      context.queryClient.ensureQueryData(listQuery(pagination, inactive)),
+    ]),
 });

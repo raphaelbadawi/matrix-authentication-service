@@ -19,7 +19,9 @@ pub use self::{
 #[cfg(test)]
 mod tests {
     use chrono::Duration;
-    use mas_data_model::UpstreamOAuthProviderClaimsImports;
+    use mas_data_model::{
+        UpstreamOAuthProviderClaimsImports, UpstreamOAuthProviderTokenAuthMethod,
+    };
     use mas_storage::{
         clock::MockClock,
         upstream_oauth2::{
@@ -57,17 +59,19 @@ mod tests {
                     human_name: None,
                     brand_name: None,
                     scope: Scope::from_iter([OPENID]),
-                    token_endpoint_auth_method:
-                        mas_iana::oauth::OAuthClientAuthenticationMethod::None,
+                    token_endpoint_auth_method: UpstreamOAuthProviderTokenAuthMethod::None,
+                    fetch_userinfo: false,
                     token_endpoint_signing_alg: None,
                     client_id: "client-id".to_owned(),
                     encrypted_client_secret: None,
                     claims_imports: UpstreamOAuthProviderClaimsImports::default(),
                     token_endpoint_override: None,
                     authorization_endpoint_override: None,
+                    userinfo_endpoint_override: None,
                     jwks_uri_override: None,
                     discovery_mode: mas_data_model::UpstreamOAuthProviderDiscoveryMode::Oidc,
                     pkce_mode: mas_data_model::UpstreamOAuthProviderPkceMode::Auto,
+                    response_mode: mas_data_model::UpstreamOAuthProviderResponseMode::Query,
                     additional_authorization_parameters: Vec::new(),
                 },
             )
@@ -120,7 +124,7 @@ mod tests {
         // Create a link
         let link = repo
             .upstream_oauth_link()
-            .add(&mut rng, &clock, &provider, "a-subject".to_owned())
+            .add(&mut rng, &clock, &provider, "a-subject".to_owned(), None)
             .await
             .unwrap();
 
@@ -143,7 +147,7 @@ mod tests {
 
         let session = repo
             .upstream_oauth_session()
-            .complete_with_link(&clock, session, &link, None)
+            .complete_with_link(&clock, session, &link, None, None, None)
             .await
             .unwrap();
         // Reload the session
@@ -299,17 +303,19 @@ mod tests {
                         human_name: None,
                         brand_name: None,
                         scope: scope.clone(),
-                        token_endpoint_auth_method:
-                            mas_iana::oauth::OAuthClientAuthenticationMethod::None,
+                        token_endpoint_auth_method: UpstreamOAuthProviderTokenAuthMethod::None,
+                        fetch_userinfo: false,
                         token_endpoint_signing_alg: None,
                         client_id,
                         encrypted_client_secret: None,
                         claims_imports: UpstreamOAuthProviderClaimsImports::default(),
                         token_endpoint_override: None,
                         authorization_endpoint_override: None,
+                        userinfo_endpoint_override: None,
                         jwks_uri_override: None,
                         discovery_mode: mas_data_model::UpstreamOAuthProviderDiscoveryMode::Oidc,
                         pkce_mode: mas_data_model::UpstreamOAuthProviderPkceMode::Auto,
+                        response_mode: mas_data_model::UpstreamOAuthProviderResponseMode::Query,
                         additional_authorization_parameters: Vec::new(),
                     },
                 )

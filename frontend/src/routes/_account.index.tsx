@@ -4,19 +4,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Please see LICENSE in the repository root for full details.
 
-import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
+import { queryOptions } from "@tanstack/react-query";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { zodSearchValidator } from "@tanstack/router-zod-adapter";
 import * as z from "zod";
-
 import { graphql } from "../gql";
+import { graphqlRequest } from "../graphql";
 
-export const QUERY = graphql(/* GraphQL */ `
-  query UserProfileQuery {
+const QUERY = graphql(/* GraphQL */ `
+  query UserProfile {
     viewer {
       __typename
       ... on User {
         id
-
         primaryEmail {
           id
           ...UserEmail_email
@@ -27,7 +27,6 @@ export const QUERY = graphql(/* GraphQL */ `
     }
 
     siteConfig {
-      id
       emailChangeAllowed
       passwordLoginEnabled
       ...UserEmailList_siteConfig
@@ -36,6 +35,11 @@ export const QUERY = graphql(/* GraphQL */ `
     }
   }
 `);
+
+export const query = queryOptions({
+  queryKey: ["userProfile"],
+  queryFn: ({ signal }) => graphqlRequest({ query: QUERY, signal }),
+});
 
 const actionSchema = z
   .discriminatedUnion("action", [
@@ -101,13 +105,5 @@ export const Route = createFileRoute("/_account/")({
     }
   },
 
-  async loader({ context, abortController: { signal } }) {
-    const result = await context.client.query(
-      QUERY,
-      {},
-      { fetchOptions: { signal } },
-    );
-    if (result.error) throw result.error;
-    if (result.data?.viewer.__typename !== "User") throw notFound();
-  },
+  loader: ({ context }) => context.queryClient.ensureQueryData(query),
 });

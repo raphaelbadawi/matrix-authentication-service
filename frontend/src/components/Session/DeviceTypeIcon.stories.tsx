@@ -6,8 +6,6 @@
 
 import type { Meta, StoryObj } from "@storybook/react";
 
-import { DeviceType } from "../../gql/graphql";
-
 import DeviceTypeIcon from "./DeviceTypeIcon";
 
 const meta = {
@@ -15,17 +13,12 @@ const meta = {
   component: DeviceTypeIcon,
   tags: ["autodocs"],
   args: {
-    deviceType: DeviceType.Unknown,
+    deviceType: "UNKNOWN",
   },
   argTypes: {
     deviceType: {
       control: "select",
-      options: [
-        DeviceType.Unknown,
-        DeviceType.Pc,
-        DeviceType.Mobile,
-        DeviceType.Tablet,
-      ],
+      options: ["UNKNOWN", "PC", "MOBILE", "TABLET"],
     },
   },
 } satisfies Meta<typeof DeviceTypeIcon>;
@@ -37,16 +30,16 @@ export const Unknown: Story = {};
 
 export const Pc: Story = {
   args: {
-    deviceType: DeviceType.Pc,
+    deviceType: "PC",
   },
 };
 export const Mobile: Story = {
   args: {
-    deviceType: DeviceType.Mobile,
+    deviceType: "MOBILE",
   },
 };
 export const Tablet: Story = {
   args: {
-    deviceType: DeviceType.Tablet,
+    deviceType: "TABLET",
   },
 };

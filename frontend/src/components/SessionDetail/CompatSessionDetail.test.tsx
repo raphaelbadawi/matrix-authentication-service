@@ -6,22 +6,13 @@
 
 // @vitest-environment happy-dom
 
-import { cleanup, render } from "@testing-library/react";
-import { Provider } from "urql";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { never } from "wonka";
-
+import { beforeAll, describe, expect, it } from "vitest";
 import { makeFragmentData } from "../../gql";
 import { mockLocale } from "../../test-utils/mockLocale";
-import { DummyRouter } from "../../test-utils/router";
-
+import render from "../../test-utils/render";
 import CompatSessionDetail, { FRAGMENT } from "./CompatSessionDetail";
 
 describe("<CompatSessionDetail>", () => {
-  const mockClient = {
-    executeQuery: (): typeof never => never,
-  };
-
   const baseSession = {
     id: "session-id",
     deviceId: "abcd1234",
@@ -37,17 +28,12 @@ describe("<CompatSessionDetail>", () => {
   };
 
   beforeAll(() => mockLocale());
-  afterEach(cleanup);
 
   it("renders a compatability session details", () => {
     const data = makeFragmentData({ ...baseSession }, FRAGMENT);
 
     const { container, getByText, queryByText } = render(
-      <Provider value={mockClient}>
-        <DummyRouter>
-          <CompatSessionDetail session={data} />
-        </DummyRouter>
-      </Provider>,
+      <CompatSessionDetail session={data} />,
     );
 
     expect(container).toMatchSnapshot();
@@ -65,11 +51,7 @@ describe("<CompatSessionDetail>", () => {
     );
 
     const { container, getByText, queryByText } = render(
-      <Provider value={mockClient}>
-        <DummyRouter>
-          <CompatSessionDetail session={data} />
-        </DummyRouter>
-      </Provider>,
+      <CompatSessionDetail session={data} />,
     );
 
     expect(container).toMatchSnapshot();
@@ -87,11 +69,7 @@ describe("<CompatSessionDetail>", () => {
     );
 
     const { container, getByText, queryByText } = render(
-      <Provider value={mockClient}>
-        <DummyRouter>
-          <CompatSessionDetail session={data} />
-        </DummyRouter>
-      </Provider>,
+      <CompatSessionDetail session={data} />,
     );
 
     expect(container).toMatchSnapshot();

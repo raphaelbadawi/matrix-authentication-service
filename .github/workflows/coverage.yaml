@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout the code
-        uses: actions/checkout@v4.2.1
+        uses: actions/checkout@v4.2.2
 
       - name: Setup OPA
         uses: open-policy-agent/setup-opa@v2.2.0
@@ -36,7 +36,7 @@ jobs:
         run: make coverage
 
       - name: Upload to codecov.io
-        uses: codecov/codecov-action@v4.6.0
+        uses: codecov/codecov-action@v5.0.7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: policies/coverage.json
@@ -52,10 +52,10 @@ jobs:
 
     steps:
       - name: Checkout the code
-        uses: actions/checkout@v4.2.1
+        uses: actions/checkout@v4.2.2
 
       - name: Install Node
-        uses: actions/setup-node@v4.0.4
+        uses: actions/setup-node@v4.1.0
         with:
           node-version: 20
 
@@ -67,14 +67,14 @@ jobs:
         working-directory: ./frontend
         run: npm run build
         env:
-          UPLOAD_CODECOV_BUNDLE: "true"
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Test
         working-directory: ./frontend
         run: npm run coverage
 
       - name: Upload to codecov.io
-        uses: codecov/codecov-action@v4.6.0
+        uses: codecov/codecov-action@v5.0.7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           directory: frontend/coverage/
@@ -108,7 +108,7 @@ jobs:
 
     steps:
       - name: Checkout the code
-        uses: actions/checkout@v4.2.1
+        uses: actions/checkout@v4.2.2
 
       - name: Install toolchain
         run: |
@@ -117,7 +117,7 @@ jobs:
           rustup component add llvm-tools-preview
 
       - name: Install Node
-        uses: actions/setup-node@v4.0.4
+        uses: actions/setup-node@v4.1.0
         with:
           node-version: 20
 
@@ -162,7 +162,7 @@ jobs:
           grcov . --binary-path ./target/debug/deps/ -s . -t lcov --branch --ignore-not-existing --ignore '../*' --ignore "/*" -o target/coverage/tests.lcov
 
       - name: Upload to codecov.io
-        uses: codecov/codecov-action@v4.6.0
+        uses: codecov/codecov-action@v5.0.7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: target/coverage/*.lcov

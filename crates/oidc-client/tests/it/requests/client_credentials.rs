@@ -7,11 +7,11 @@
 use std::collections::HashMap;
 
 use mas_iana::oauth::{OAuthAccessTokenType, OAuthClientAuthenticationMethod};
-use mas_oidc_client::{
-    requests::client_credentials::access_token_with_client_credentials,
-    types::scope::{ScopeExt, ScopeToken},
+use mas_oidc_client::requests::client_credentials::access_token_with_client_credentials;
+use oauth2_types::{
+    requests::AccessTokenResponse,
+    scope::{Scope, PROFILE},
 };
-use oauth2_types::{requests::AccessTokenResponse, scope::Scope};
 use rand::SeedableRng;
 use wiremock::{
     matchers::{method, path},
@@ -22,14 +22,11 @@ use crate::{client_credentials, init_test, now, ACCESS_TOKEN, CLIENT_ID, CLIENT_
 
 #[tokio::test]
 async fn pass_access_token_with_client_credentials() {
-    let (http_service, mock_server, issuer) = init_test().await;
-    let client_credentials = client_credentials(
-        &OAuthClientAuthenticationMethod::ClientSecretPost,
-        &issuer,
-        None,
-    );
+    let (http_client, mock_server, issuer) = init_test().await;
+    let client_credentials =
+        client_credentials(&OAuthClientAuthenticationMethod::ClientSecretPost, &issuer);
     let token_endpoint = issuer.join("token").unwrap();
-    let scope = [ScopeToken::Profile].into_iter().collect::<Scope>();
+    let scope = [PROFILE].into_iter().collect::<Scope>();
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
     Mock::given(method("POST"))
@@ -86,7 +83,7 @@ async fn pass_access_token_with_client_credentials() {
         .await;
 
     let response = access_token_with_client_credentials(
-        &http_service,
+        &http_client,
         client_credentials,
         &token_endpoint,
         Some(scope),
@@ -98,5 +95,5 @@ async fn pass_access_token_with_client_credentials() {
 
     assert_eq!(response.access_token, ACCESS_TOKEN);
     assert_eq!(response.refresh_token, None);
-    assert!(response.scope.unwrap().contains_token(&ScopeToken::Profile));
+    assert!(response.scope.unwrap().contains("profile"));
 }

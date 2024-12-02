@@ -13,10 +13,14 @@ const config: CodegenConfig = {
   generates: {
     "./src/gql/": {
       preset: "client",
+      plugins: ["typescript-msw"],
       config: {
+        documentMode: "string",
         useTypeImports: true,
+        enumsAsTypes: true,
         // By default, unknown scalars are generated as `any`. This is not ideal for catching potential bugs.
         defaultScalarType: "unknown",
+        maybeValue: "T | null | undefined",
         scalars: {
           DateTime: "string",
           Url: "string",

@@ -56,19 +56,24 @@ struct ProviderLookup {
     encrypted_client_secret: Option<String>,
     token_endpoint_signing_alg: Option<String>,
     token_endpoint_auth_method: String,
+    fetch_userinfo: bool,
     created_at: DateTime<Utc>,
     disabled_at: Option<DateTime<Utc>>,
     claims_imports: Json<UpstreamOAuthProviderClaimsImports>,
     jwks_uri_override: Option<String>,
     authorization_endpoint_override: Option<String>,
     token_endpoint_override: Option<String>,
+    userinfo_endpoint_override: Option<String>,
     discovery_mode: String,
     pkce_mode: String,
+    response_mode: String,
     additional_parameters: Option<Json<Vec<(String, String)>>>,
 }
 
 impl TryFrom<ProviderLookup> for UpstreamOAuthProvider {
     type Error = DatabaseInconsistencyError;
+
+    #[allow(clippy::too_many_lines)]
     fn try_from(value: ProviderLookup) -> Result<Self, Self::Error> {
         let id = value.upstream_oauth_provider_id.into();
         let scope = value.scope.parse().map_err(|e| {
@@ -116,6 +121,17 @@ impl TryFrom<ProviderLookup> for UpstreamOAuthProvider {
                     .source(e)
             })?;
 
+        let userinfo_endpoint_override = value
+            .userinfo_endpoint_override
+            .map(|x| x.parse())
+            .transpose()
+            .map_err(|e| {
+                DatabaseInconsistencyError::on("upstream_oauth_providers")
+                    .column("userinfo_endpoint_override")
+                    .row(id)
+                    .source(e)
+            })?;
+
         let jwks_uri_override = value
             .jwks_uri_override
             .map(|x| x.parse())
@@ -141,6 +157,13 @@ impl TryFrom<ProviderLookup> for UpstreamOAuthProvider {
                 .source(e)
         })?;
 
+        let response_mode = value.response_mode.parse().map_err(|e| {
+            DatabaseInconsistencyError::on("upstream_oauth_providers")
+                .column("response_mode")
+                .row(id)
+                .source(e)
+        })?;
+
         let additional_authorization_parameters = value
             .additional_parameters
             .map(|Json(x)| x)
@@ -155,15 +178,18 @@ impl TryFrom<ProviderLookup> for UpstreamOAuthProvider {
             client_id: value.client_id,
             encrypted_client_secret: value.encrypted_client_secret,
             token_endpoint_auth_method,
+            fetch_userinfo: value.fetch_userinfo,
             token_endpoint_signing_alg,
             created_at: value.created_at,
             disabled_at: value.disabled_at,
             claims_imports: value.claims_imports.0,
             authorization_endpoint_override,
             token_endpoint_override,
+            userinfo_endpoint_override,
             jwks_uri_override,
             discovery_mode,
             pkce_mode,
+            response_mode,
             additional_authorization_parameters,
         })
     }
@@ -209,14 +235,17 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
                     encrypted_client_secret,
                     token_endpoint_signing_alg,
                     token_endpoint_auth_method,
+                    fetch_userinfo,
                     created_at,
                     disabled_at,
                     claims_imports as "claims_imports: Json<UpstreamOAuthProviderClaimsImports>",
                     jwks_uri_override,
                     authorization_endpoint_override,
                     token_endpoint_override,
+                    userinfo_endpoint_override,
                     discovery_mode,
                     pkce_mode,
+                    response_mode,
                     additional_parameters as "additional_parameters: Json<Vec<(String, String)>>"
                 FROM upstream_oauth_providers
                 WHERE upstream_oauth_provider_id = $1
@@ -265,18 +294,21 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
                 brand_name,
                 scope,
                 token_endpoint_auth_method,
+                fetch_userinfo,
                 token_endpoint_signing_alg,
                 client_id,
                 encrypted_client_secret,
                 claims_imports,
                 authorization_endpoint_override,
                 token_endpoint_override,
+                userinfo_endpoint_override,
                 jwks_uri_override,
                 discovery_mode,
                 pkce_mode,
+                response_mode,
                 created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                      $10, $11, $12, $13, $14, $15, $16)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                      $11, $12, $13, $14, $15, $16, $17, $18, $19)
         "#,
             Uuid::from(id),
             &params.issuer,
@@ -284,6 +316,7 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
             params.brand_name.as_deref(),
             params.scope.to_string(),
             params.token_endpoint_auth_method.to_string(),
+            params.fetch_userinfo,
             params
                 .token_endpoint_signing_alg
                 .as_ref()
@@ -299,9 +332,14 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
                 .token_endpoint_override
                 .as_ref()
                 .map(ToString::to_string),
+            params
+                .userinfo_endpoint_override
+                .as_ref()
+                .map(ToString::to_string),
             params.jwks_uri_override.as_ref().map(ToString::to_string),
             params.discovery_mode.as_str(),
             params.pkce_mode.as_str(),
+            params.response_mode.as_str(),
             created_at,
         )
         .traced()
@@ -318,14 +356,17 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
             encrypted_client_secret: params.encrypted_client_secret,
             token_endpoint_signing_alg: params.token_endpoint_signing_alg,
             token_endpoint_auth_method: params.token_endpoint_auth_method,
+            fetch_userinfo: params.fetch_userinfo,
             created_at,
             disabled_at: None,
             claims_imports: params.claims_imports,
             authorization_endpoint_override: params.authorization_endpoint_override,
             token_endpoint_override: params.token_endpoint_override,
+            userinfo_endpoint_override: params.userinfo_endpoint_override,
             jwks_uri_override: params.jwks_uri_override,
             discovery_mode: params.discovery_mode,
             pkce_mode: params.pkce_mode,
+            response_mode: params.response_mode,
             additional_authorization_parameters: params.additional_authorization_parameters,
         })
     }
@@ -424,19 +465,22 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
                     brand_name,
                     scope,
                     token_endpoint_auth_method,
+                    fetch_userinfo,
                     token_endpoint_signing_alg,
                     client_id,
                     encrypted_client_secret,
                     claims_imports,
                     authorization_endpoint_override,
                     token_endpoint_override,
+                    userinfo_endpoint_override,
                     jwks_uri_override,
                     discovery_mode,
                     pkce_mode,
+                    response_mode,
                     additional_parameters,
                     created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                          $10, $11, $12, $13, $14, $15, $16, $17)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                          $12, $13, $14, $15, $16, $17, $18, $19, $20)
                 ON CONFLICT (upstream_oauth_provider_id)
                     DO UPDATE
                     SET
@@ -445,6 +489,7 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
                         brand_name = EXCLUDED.brand_name,
                         scope = EXCLUDED.scope,
                         token_endpoint_auth_method = EXCLUDED.token_endpoint_auth_method,
+                        fetch_userinfo = EXCLUDED.fetch_userinfo,
                         token_endpoint_signing_alg = EXCLUDED.token_endpoint_signing_alg,
                         disabled_at = NULL,
                         client_id = EXCLUDED.client_id,
@@ -452,9 +497,11 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
                         claims_imports = EXCLUDED.claims_imports,
                         authorization_endpoint_override = EXCLUDED.authorization_endpoint_override,
                         token_endpoint_override = EXCLUDED.token_endpoint_override,
+                        userinfo_endpoint_override = EXCLUDED.userinfo_endpoint_override,
                         jwks_uri_override = EXCLUDED.jwks_uri_override,
                         discovery_mode = EXCLUDED.discovery_mode,
                         pkce_mode = EXCLUDED.pkce_mode,
+                        response_mode = EXCLUDED.response_mode,
                         additional_parameters = EXCLUDED.additional_parameters
                 RETURNING created_at
             "#,
@@ -464,6 +511,7 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
             params.brand_name.as_deref(),
             params.scope.to_string(),
             params.token_endpoint_auth_method.to_string(),
+            params.fetch_userinfo,
             params
                 .token_endpoint_signing_alg
                 .as_ref()
@@ -479,9 +527,14 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
                 .token_endpoint_override
                 .as_ref()
                 .map(ToString::to_string),
+            params
+                .userinfo_endpoint_override
+                .as_ref()
+                .map(ToString::to_string),
             params.jwks_uri_override.as_ref().map(ToString::to_string),
             params.discovery_mode.as_str(),
             params.pkce_mode.as_str(),
+            params.response_mode.as_str(),
             Json(&params.additional_authorization_parameters) as _,
             created_at,
         )
@@ -499,14 +552,17 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
             encrypted_client_secret: params.encrypted_client_secret,
             token_endpoint_signing_alg: params.token_endpoint_signing_alg,
             token_endpoint_auth_method: params.token_endpoint_auth_method,
+            fetch_userinfo: params.fetch_userinfo,
             created_at,
             disabled_at: None,
             claims_imports: params.claims_imports,
             authorization_endpoint_override: params.authorization_endpoint_override,
             token_endpoint_override: params.token_endpoint_override,
+            userinfo_endpoint_override: params.userinfo_endpoint_override,
             jwks_uri_override: params.jwks_uri_override,
             discovery_mode: params.discovery_mode,
             pkce_mode: params.pkce_mode,
+            response_mode: params.response_mode,
             additional_authorization_parameters: params.additional_authorization_parameters,
         })
     }
@@ -630,6 +686,13 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
             .expr_as(
                 Expr::col((
                     UpstreamOAuthProviders::Table,
+                    UpstreamOAuthProviders::FetchUserinfo,
+                )),
+                ProviderLookupIden::FetchUserinfo,
+            )
+            .expr_as(
+                Expr::col((
+                    UpstreamOAuthProviders::Table,
                     UpstreamOAuthProviders::DisabledAt,
                 )),
                 ProviderLookupIden::DisabledAt,
@@ -665,6 +728,13 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
             .expr_as(
                 Expr::col((
                     UpstreamOAuthProviders::Table,
+                    UpstreamOAuthProviders::UserinfoEndpointOverride,
+                )),
+                ProviderLookupIden::UserinfoEndpointOverride,
+            )
+            .expr_as(
+                Expr::col((
+                    UpstreamOAuthProviders::Table,
                     UpstreamOAuthProviders::DiscoveryMode,
                 )),
                 ProviderLookupIden::DiscoveryMode,
@@ -675,6 +745,13 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
                     UpstreamOAuthProviders::PkceMode,
                 )),
                 ProviderLookupIden::PkceMode,
+            )
+            .expr_as(
+                Expr::col((
+                    UpstreamOAuthProviders::Table,
+                    UpstreamOAuthProviders::ResponseMode,
+                )),
+                ProviderLookupIden::ResponseMode,
             )
             .expr_as(
                 Expr::col((
@@ -762,14 +839,17 @@ impl<'c> UpstreamOAuthProviderRepository for PgUpstreamOAuthProviderRepository<'
                     encrypted_client_secret,
                     token_endpoint_signing_alg,
                     token_endpoint_auth_method,
+                    fetch_userinfo,
                     created_at,
                     disabled_at,
                     claims_imports as "claims_imports: Json<UpstreamOAuthProviderClaimsImports>",
                     jwks_uri_override,
                     authorization_endpoint_override,
                     token_endpoint_override,
+                    userinfo_endpoint_override,
                     discovery_mode,
                     pkce_mode,
+                    response_mode,
                     additional_parameters as "additional_parameters: Json<Vec<(String, String)>>"
                 FROM upstream_oauth_providers
                 WHERE disabled_at IS NULL

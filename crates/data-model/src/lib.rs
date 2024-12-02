@@ -9,7 +9,7 @@
 use thiserror::Error;
 
 pub(crate) mod compat;
-pub(crate) mod oauth2;
+pub mod oauth2;
 mod site_config;
 pub(crate) mod tokens;
 pub(crate) mod upstream_oauth2;
@@ -41,7 +41,8 @@ pub use self::{
         UpstreamOAuthAuthorizationSessionState, UpstreamOAuthLink, UpstreamOAuthProvider,
         UpstreamOAuthProviderClaimsImports, UpstreamOAuthProviderDiscoveryMode,
         UpstreamOAuthProviderImportAction, UpstreamOAuthProviderImportPreference,
-        UpstreamOAuthProviderPkceMode, UpstreamOAuthProviderSubjectPreference,
+        UpstreamOAuthProviderPkceMode, UpstreamOAuthProviderResponseMode,
+        UpstreamOAuthProviderSubjectPreference, UpstreamOAuthProviderTokenAuthMethod,
     },
     user_agent::{DeviceType, UserAgent},
     users::{

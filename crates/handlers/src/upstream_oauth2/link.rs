@@ -38,7 +38,10 @@ use thiserror::Error;
 use tracing::warn;
 use ulid::Ulid;
 
-use super::{template::environment, UpstreamSessionsCookie};
+use super::{
+    template::{environment, AttributeMappingContext},
+    UpstreamSessionsCookie,
+};
 use crate::{
     impl_from_error_for_route, views::shared::OptionalPostAuthAction, PreferredLanguage, SiteConfig,
 };
@@ -130,9 +133,10 @@ impl IntoResponse for RouteError {
 fn render_attribute_template(
     environment: &Environment,
     template: &str,
+    context: &minijinja::Value,
     required: bool,
 ) -> Result<Option<String>, RouteError> {
-    match environment.render_str(template, ()) {
+    match environment.render_str(template, context) {
         Ok(value) if value.is_empty() => {
             if required {
                 return Err(RouteError::RequiredAttributeEmpty {
@@ -320,10 +324,7 @@ pub(crate) async fn get(
         (None, None) => {
             // Session not linked and used not logged in: suggest creating an
             // account or logging in an existing user
-            let id_token = upstream_session
-                .id_token()
-                .map(Jwt::<'_, minijinja::Value>::try_from)
-                .transpose()?;
+            let id_token = upstream_session.id_token().map(Jwt::try_from).transpose()?;
 
             let provider = repo
                 .upstream_oauth_provider()
@@ -331,17 +332,22 @@ pub(crate) async fn get(
                 .await?
                 .ok_or(RouteError::ProviderNotFound)?;
 
-            let payload = id_token
-                .map(|id_token| id_token.into_parts().1)
-                .unwrap_or_default();
+            let ctx = UpstreamRegister::new(link.clone(), provider.clone());
 
-            let ctx = UpstreamRegister::default();
+            let env = environment();
 
-            let env = {
-                let mut e = environment();
-                e.add_global("user", payload);
-                e
-            };
+            let mut context = AttributeMappingContext::new();
+            if let Some(id_token) = id_token {
+                let (_, payload) = id_token.into_parts();
+                context = context.with_id_token_claims(payload);
+            }
+            if let Some(extra_callback_parameters) = upstream_session.extra_callback_parameters() {
+                context = context.with_extra_callback_parameters(extra_callback_parameters.clone());
+            }
+            if let Some(userinfo) = upstream_session.userinfo() {
+                context = context.with_userinfo_claims(userinfo.clone());
+            }
+            let context = context.build();
 
             let ctx = if provider.claims_imports.displayname.ignore() {
                 ctx
@@ -356,6 +362,7 @@ pub(crate) async fn get(
                 match render_attribute_template(
                     &env,
                     template,
+                    &context,
                     provider.claims_imports.displayname.is_required(),
                 )? {
                     Some(value) => ctx
@@ -377,6 +384,7 @@ pub(crate) async fn get(
                 match render_attribute_template(
                     &env,
                     template,
+                    &context,
                     provider.claims_imports.email.is_required(),
                 )? {
                     Some(value) => ctx.with_email(value, provider.claims_imports.email.is_forced()),
@@ -397,6 +405,7 @@ pub(crate) async fn get(
                 match render_attribute_template(
                     &env,
                     template,
+                    &context,
                     provider.claims_imports.localpart.is_required(),
                 )? {
                     Some(localpart) => {
@@ -557,10 +566,7 @@ pub(crate) async fn post(
             let import_display_name = import_display_name.is_some();
             let accept_terms = accept_terms.is_some();
 
-            let id_token = upstream_session
-                .id_token()
-                .map(Jwt::<'_, minijinja::Value>::try_from)
-                .transpose()?;
+            let id_token = upstream_session.id_token().map(Jwt::try_from).transpose()?;
 
             let provider = repo
                 .upstream_oauth_provider()
@@ -568,25 +574,29 @@ pub(crate) async fn post(
                 .await?
                 .ok_or(RouteError::ProviderNotFound)?;
 
-            let payload = id_token
-                .map(|id_token| id_token.into_parts().1)
-                .unwrap_or_default();
+            // Let's try to import the claims from the ID token
+            let env = environment();
+
+            let mut context = AttributeMappingContext::new();
+            if let Some(id_token) = id_token {
+                let (_, payload) = id_token.into_parts();
+                context = context.with_id_token_claims(payload);
+            }
+            if let Some(extra_callback_parameters) = upstream_session.extra_callback_parameters() {
+                context = context.with_extra_callback_parameters(extra_callback_parameters.clone());
+            }
+            if let Some(userinfo) = upstream_session.userinfo() {
+                context = context.with_userinfo_claims(userinfo.clone());
+            }
+            let context = context.build();
 
             // Is the email verified according to the upstream provider?
-            let provider_email_verified = payload
-                .get_item(&minijinja::Value::from("email_verified"))
-                .map(|v| v.is_true())
-                .unwrap_or(false);
-
-            // Let's try to import the claims from the ID token
-            let env = {
-                let mut e = environment();
-                e.add_global("user", payload);
-                e
-            };
+            let provider_email_verified = env
+                .render_str("{{ user.email_verified | string }}", &context)
+                .map_or(false, |v| v == "true");
 
             // Create a template context in case we need to re-render because of an error
-            let ctx = UpstreamRegister::default();
+            let ctx = UpstreamRegister::new(link.clone(), provider.clone());
 
             let display_name = if provider
                 .claims_imports
@@ -603,6 +613,7 @@ pub(crate) async fn post(
                 render_attribute_template(
                     &env,
                     template,
+                    &context,
                     provider.claims_imports.displayname.is_required(),
                 )?
             } else {
@@ -629,6 +640,7 @@ pub(crate) async fn post(
                 render_attribute_template(
                     &env,
                     template,
+                    &context,
                     provider.claims_imports.email.is_required(),
                 )?
             } else {
@@ -652,6 +664,7 @@ pub(crate) async fn post(
                 render_attribute_template(
                     &env,
                     template,
+                    &context,
                     provider.claims_imports.email.is_required(),
                 )?
             } else {
@@ -843,8 +856,9 @@ mod tests {
     use hyper::{header::CONTENT_TYPE, Request, StatusCode};
     use mas_data_model::{
         UpstreamOAuthProviderClaimsImports, UpstreamOAuthProviderImportPreference,
+        UpstreamOAuthProviderTokenAuthMethod,
     };
-    use mas_iana::{jose::JsonWebSignatureAlg, oauth::OAuthClientAuthenticationMethod};
+    use mas_iana::jose::JsonWebSignatureAlg;
     use mas_jose::jwt::{JsonWebSignatureHeader, Jwt};
     use mas_router::Route;
     use mas_storage::upstream_oauth2::UpstreamOAuthProviderParams;
@@ -906,16 +920,19 @@ mod tests {
                     human_name: Some("Example Ltd.".to_owned()),
                     brand_name: None,
                     scope: Scope::from_iter([OPENID]),
-                    token_endpoint_auth_method: OAuthClientAuthenticationMethod::None,
+                    token_endpoint_auth_method: UpstreamOAuthProviderTokenAuthMethod::None,
                     token_endpoint_signing_alg: None,
                     client_id: "client".to_owned(),
                     encrypted_client_secret: None,
                     claims_imports,
                     authorization_endpoint_override: None,
                     token_endpoint_override: None,
+                    userinfo_endpoint_override: None,
+                    fetch_userinfo: false,
                     jwks_uri_override: None,
                     discovery_mode: mas_data_model::UpstreamOAuthProviderDiscoveryMode::Oidc,
                     pkce_mode: mas_data_model::UpstreamOAuthProviderPkceMode::Auto,
+                    response_mode: mas_data_model::UpstreamOAuthProviderResponseMode::Query,
                     additional_authorization_parameters: Vec::new(),
                 },
             )
@@ -937,13 +954,26 @@ mod tests {
 
         let link = repo
             .upstream_oauth_link()
-            .add(&mut rng, &state.clock, &provider, "subject".to_owned())
+            .add(
+                &mut rng,
+                &state.clock,
+                &provider,
+                "subject".to_owned(),
+                None,
+            )
             .await
             .unwrap();
 
         let session = repo
             .upstream_oauth_session()
-            .complete_with_link(&state.clock, session, &link, Some(id_token.into_string()))
+            .complete_with_link(
+                &state.clock,
+                session,
+                &link,
+                Some(id_token.into_string()),
+                None,
+                None,
+            )
             .await
             .unwrap();
 

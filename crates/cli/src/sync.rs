@@ -67,6 +67,9 @@ fn map_claims_imports(
                 mas_data_model::UpsreamOAuthProviderSetEmailVerification::Import
             }
         },
+        account_name: mas_data_model::UpstreamOAuthProviderSubjectPreference {
+            template: config.account_name.template.clone(),
+        },
     }
 }
 
@@ -187,11 +190,17 @@ pub async fn config_sync(
                 continue;
             }
 
-            let encrypted_client_secret = provider
-                .client_secret
-                .as_deref()
-                .map(|client_secret| encrypter.encrypt_to_string(client_secret.as_bytes()))
-                .transpose()?;
+            let encrypted_client_secret =
+                if let Some(client_secret) = provider.client_secret.as_deref() {
+                    Some(encrypter.encrypt_to_string(client_secret.as_bytes())?)
+                } else if let Some(siwa) = provider.sign_in_with_apple.as_ref() {
+                    // For SIWA, we JSON-encode the config and encrypt it, reusing the client_secret
+                    // field in the database
+                    let encoded = serde_json::to_vec(siwa)?;
+                    Some(encrypter.encrypt_to_string(&encoded)?)
+                } else {
+                    None
+                };
 
             let discovery_mode = match provider.discovery_mode {
                 mas_config::UpstreamOAuth2DiscoveryMode::Oidc => {
@@ -205,6 +214,36 @@ pub async fn config_sync(
                 }
             };
 
+            let token_endpoint_auth_method = match provider.token_endpoint_auth_method {
+                mas_config::UpstreamOAuth2TokenAuthMethod::None => {
+                    mas_data_model::UpstreamOAuthProviderTokenAuthMethod::None
+                }
+                mas_config::UpstreamOAuth2TokenAuthMethod::ClientSecretBasic => {
+                    mas_data_model::UpstreamOAuthProviderTokenAuthMethod::ClientSecretBasic
+                }
+                mas_config::UpstreamOAuth2TokenAuthMethod::ClientSecretPost => {
+                    mas_data_model::UpstreamOAuthProviderTokenAuthMethod::ClientSecretPost
+                }
+                mas_config::UpstreamOAuth2TokenAuthMethod::ClientSecretJwt => {
+                    mas_data_model::UpstreamOAuthProviderTokenAuthMethod::ClientSecretJwt
+                }
+                mas_config::UpstreamOAuth2TokenAuthMethod::PrivateKeyJwt => {
+                    mas_data_model::UpstreamOAuthProviderTokenAuthMethod::PrivateKeyJwt
+                }
+                mas_config::UpstreamOAuth2TokenAuthMethod::SignInWithApple => {
+                    mas_data_model::UpstreamOAuthProviderTokenAuthMethod::SignInWithApple
+                }
+            };
+
+            let response_mode = match provider.response_mode {
+                mas_config::UpstreamOAuth2ResponseMode::Query => {
+                    mas_data_model::UpstreamOAuthProviderResponseMode::Query
+                }
+                mas_config::UpstreamOAuth2ResponseMode::FormPost => {
+                    mas_data_model::UpstreamOAuthProviderResponseMode::FormPost
+                }
+            };
+
             if discovery_mode.is_disabled() {
                 if provider.authorization_endpoint.is_none() {
                     error!("Provider has discovery disabled but no authorization endpoint set");
@@ -215,7 +254,7 @@ pub async fn config_sync(
                 }
 
                 if provider.jwks_uri.is_none() {
-                    error!("Provider has discovery disabled but no JWKS URI set");
+                    warn!("Provider has discovery disabled but no JWKS URI set");
                 }
             }
 
@@ -240,7 +279,7 @@ pub async fn config_sync(
                         human_name: provider.human_name,
                         brand_name: provider.brand_name,
                         scope: provider.scope.parse()?,
-                        token_endpoint_auth_method: provider.token_endpoint_auth_method.into(),
+                        token_endpoint_auth_method,
                         token_endpoint_signing_alg: provider
                             .token_endpoint_auth_signing_alg
                             .clone(),
@@ -248,10 +287,13 @@ pub async fn config_sync(
                         encrypted_client_secret,
                         claims_imports: map_claims_imports(&provider.claims_imports),
                         token_endpoint_override: provider.token_endpoint,
+                        userinfo_endpoint_override: provider.userinfo_endpoint,
                         authorization_endpoint_override: provider.authorization_endpoint,
                         jwks_uri_override: provider.jwks_uri,
                         discovery_mode,
                         pkce_mode,
+                        fetch_userinfo: provider.fetch_userinfo,
+                        response_mode,
                         additional_authorization_parameters: provider
                             .additional_authorization_parameters
                             .into_iter()

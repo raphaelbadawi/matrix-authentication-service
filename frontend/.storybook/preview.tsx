@@ -11,13 +11,26 @@ import type {
   Preview,
 } from "@storybook/react";
 import { TooltipProvider } from "@vector-im/compound-web";
+import { initialize, mswLoader } from "msw-storybook-addon";
 import { useLayoutEffect } from "react";
-
 import "../src/shared.css";
-import i18n from "../src/i18n";
-
+import i18n, { setupI18n } from "../src/i18n";
 import { DummyRouter } from "../src/test-utils/router";
+import { handlers } from "../tests/mocks/handlers";
 import localazyMetadata from "./locales";
+import swUrl from "./mockServiceWorker.js?url";
+
+initialize(
+  {
+    onUnhandledRequest: "bypass",
+    serviceWorker: {
+      url: swUrl,
+    },
+  },
+  handlers,
+);
+
+setupI18n();
 
 export const parameters: Parameters = {
   controls: {
@@ -74,7 +87,7 @@ const withThemeProvider: Decorator = (Story, context) => {
   );
 };
 
-const withDummyRouter: Decorator = (Story, context) => {
+const withDummyRouter: Decorator = (Story, _context) => {
   return (
     <DummyRouter>
       <Story />
@@ -82,7 +95,7 @@ const withDummyRouter: Decorator = (Story, context) => {
   );
 };
 
-const withTooltipProvider: Decorator = (Story, context) => {
+const withTooltipProvider: Decorator = (Story, _context) => {
   return (
     <TooltipProvider>
       <Story />
@@ -104,13 +117,14 @@ const locales = Object.fromEntries(
 );
 
 const preview: Preview = {
-  globals: {
+  initialGlobals: {
     locale: localazyMetadata.baseLocale,
     locales,
   },
   parameters: {
     i18n,
   },
+  loaders: [mswLoader],
 };
 
 export default preview;

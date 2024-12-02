@@ -7,15 +7,13 @@
 import IconChrome from "@browser-logos/chrome/chrome_64x64.png?url";
 import IconFirefox from "@browser-logos/firefox/firefox_64x64.png?url";
 import IconSafari from "@browser-logos/safari/safari_64x64.png?url";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@vector-im/compound-web";
 import { parseISO } from "date-fns";
 import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { useMutation } from "urql";
-
 import { type FragmentType, graphql, useFragment } from "../gql";
-import { DeviceType } from "../gql/graphql";
-
+import { graphqlRequest } from "../graphql";
 import DateTime from "./DateTime";
 import EndSessionButton from "./Session/EndSessionButton";
 import LastActive from "./Session/LastActive";
@@ -58,14 +56,26 @@ export const useEndBrowserSession = (
   sessionId: string,
   isCurrent: boolean,
 ): (() => Promise<void>) => {
-  const [, endSession] = useMutation(END_SESSION_MUTATION);
+  const queryClient = useQueryClient();
+  const endSession = useMutation({
+    mutationFn: (id: string) =>
+      graphqlRequest({ query: END_SESSION_MUTATION, variables: { id } }),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["sessionsOverview"] });
+      queryClient.invalidateQueries({ queryKey: ["browserSessionList"] });
+      queryClient.invalidateQueries({
+        queryKey: ["sessionDetail", data.endBrowserSession.browserSession?.id],
+      });
+
+      if (isCurrent) {
+        window.location.reload();
+      }
+    },
+  });
 
   const onSessionEnd = useCallback(async (): Promise<void> => {
-    await endSession({ id: sessionId });
-    if (isCurrent) {
-      window.location.reload();
-    }
-  }, [isCurrent, endSession, sessionId]);
+    await endSession.mutateAsync(sessionId);
+  }, [endSession.mutateAsync, sessionId]);
 
   return onSessionEnd;
 };
@@ -97,7 +107,7 @@ const BrowserSession: React.FC<Props> = ({ session, isCurrent }) => {
 
   const onSessionEnd = useEndBrowserSession(data.id, isCurrent);
 
-  const deviceType = data.userAgent?.deviceType ?? DeviceType.Unknown;
+  const deviceType = data.userAgent?.deviceType ?? "UNKNOWN";
 
   let deviceName: string | null = null;
   let clientName: string | null = null;

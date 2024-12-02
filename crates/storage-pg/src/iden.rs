@@ -98,15 +98,18 @@ pub enum UpstreamOAuthProviders {
     EncryptedClientSecret,
     TokenEndpointSigningAlg,
     TokenEndpointAuthMethod,
+    FetchUserinfo,
     CreatedAt,
     DisabledAt,
     ClaimsImports,
     DiscoveryMode,
     PkceMode,
+    ResponseMode,
     AdditionalParameters,
     JwksUriOverride,
     TokenEndpointOverride,
     AuthorizationEndpointOverride,
+    UserinfoEndpointOverride,
 }
 
 #[derive(sea_query::Iden)]
@@ -119,5 +122,6 @@ pub enum UpstreamOAuthLinks {
     UpstreamOAuthProviderId,
     UserId,
     Subject,
+    HumanAccountName,
     CreatedAt,
 }

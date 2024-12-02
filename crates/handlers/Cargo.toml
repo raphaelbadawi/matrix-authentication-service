@@ -15,7 +15,7 @@ workspace = true
 # Async runtime
 tokio.workspace = true
 tokio-util.workspace = true
-futures-util = "0.3.31"
+futures-util.workspace = true
 async-trait.workspace = true
 
 # Logging and tracing
@@ -35,12 +35,14 @@ tower-http.workspace = true
 axum.workspace = true
 axum-macros = "0.4.2"
 axum-extra.workspace = true
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rustls.workspace = true
 
 aide.workspace = true
 async-graphql.workspace = true
 schemars.workspace = true
+
+# HTTP client
+reqwest.workspace = true
 
 # Emails
 lettre.workspace = true
@@ -56,7 +58,7 @@ serde_urlencoded = "0.7.1"
 
 # Password hashing
 argon2 = { version = "0.5.3", features = ["password-hash", "std"] }
-bcrypt = "0.15.1"
+bcrypt = "0.16.0"
 pbkdf2 = { version = "0.12.2", features = [
     "password-hash",
     "std",
@@ -69,13 +71,16 @@ zeroize = "1.8.1"
 base64ct = "1.6.0"
 camino.workspace = true
 chrono.workspace = true
+elliptic-curve.workspace = true
 governor.workspace = true
 indexmap = "2.6.0"
-psl = "2.1.55"
+pkcs8.workspace = true
+psl = "2.1.60"
 time = "0.3.36"
 url.workspace = true
 mime = "0.3.17"
 minijinja.workspace = true
+minijinja-contrib.workspace = true
 nonzero_ext.workspace = true
 rand.workspace = true
 rand_chacha = "0.3.1"
@@ -104,6 +109,7 @@ zxcvbn = "3.1.0"
 [dev-dependencies]
 insta.workspace = true
 tracing-subscriber.workspace = true
-cookie_store = "0.21.0"
+cookie_store = "0.21.1"
 mockito = "1.5"
 sqlx.workspace = true
+wiremock.workspace = true

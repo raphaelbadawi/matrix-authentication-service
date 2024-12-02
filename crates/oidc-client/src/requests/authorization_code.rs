@@ -12,9 +12,7 @@ use std::{collections::HashSet, num::NonZeroU32};
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 use chrono::{DateTime, Utc};
-use http::header::CONTENT_TYPE;
 use language_tags::LanguageTag;
-use mas_http::{CatchHttpCodesLayer, FormUrlencodedRequestLayer, JsonResponseLayer};
 use mas_iana::oauth::{OAuthAuthorizationEndpointResponseType, PkceCodeChallengeMethod};
 use mas_jose::claims::{self, TokenHash};
 use oauth2_types::{
@@ -22,32 +20,22 @@ use oauth2_types::{
     prelude::CodeChallengeMethodExt,
     requests::{
         AccessTokenRequest, AccessTokenResponse, AuthorizationCodeGrant, AuthorizationRequest,
-        Display, Prompt, PushedAuthorizationResponse,
+        Display, Prompt, ResponseMode,
     },
-    scope::Scope,
+    scope::{Scope, OPENID},
 };
 use rand::{
     distributions::{Alphanumeric, DistString},
     Rng,
 };
 use serde::Serialize;
-use serde_with::skip_serializing_none;
-use tower::{Layer, Service, ServiceExt};
 use url::Url;
 
 use super::jose::JwtVerificationData;
 use crate::{
-    error::{
-        AuthorizationError, IdTokenError, PushedAuthorizationError, TokenAuthorizationCodeError,
-    },
-    http_service::HttpService,
+    error::{AuthorizationError, IdTokenError, TokenAuthorizationCodeError},
     requests::{jose::verify_id_token, token::request_access_token},
-    types::{
-        client_credentials::ClientCredentials,
-        scope::{ScopeExt, ScopeToken},
-        IdToken,
-    },
-    utils::{http_all_error_status_codes, http_error_mapper},
+    types::{client_credentials::ClientCredentials, IdToken},
 };
 
 /// The data necessary to build an authorization request.
@@ -101,6 +89,9 @@ pub struct AuthorizationRequestData {
 
     /// Requested Authentication Context Class Reference values.
     pub acr_values: Option<HashSet<String>>,
+
+    /// Requested response mode.
+    pub response_mode: Option<ResponseMode>,
 }
 
 impl AuthorizationRequestData {
@@ -120,6 +111,7 @@ impl AuthorizationRequestData {
             id_token_hint: None,
             login_hint: None,
             acr_values: None,
+            response_mode: None,
         }
     }
 
@@ -182,6 +174,13 @@ impl AuthorizationRequestData {
         self.acr_values = Some(acr_values);
         self
     }
+
+    /// Set the `response_mode` field of this `AuthorizationRequestData`.
+    #[must_use]
+    pub fn with_response_mode(mut self, response_mode: ResponseMode) -> Self {
+        self.response_mode = Some(response_mode);
+        self
+    }
 }
 
 /// The data necessary to validate a response from the Token endpoint in the
@@ -201,12 +200,12 @@ pub struct AuthorizationValidationData {
     pub code_challenge_verifier: Option<String>,
 }
 
-#[skip_serializing_none]
 #[derive(Clone, Serialize)]
 struct FullAuthorizationRequest {
     #[serde(flatten)]
     inner: AuthorizationRequest,
-    #[serde(flatten)]
+
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
     pkce: Option<pkce::AuthorizationRequest>,
 }
 
@@ -227,6 +226,7 @@ fn build_authorization_request(
         id_token_hint,
         login_hint,
         acr_values,
+        response_mode,
     } = authorization_data;
 
     // Generate a random CSRF "state" token and a nonce.
@@ -255,7 +255,7 @@ fn build_authorization_request(
         (None, None)
     };
 
-    scope.insert_token(ScopeToken::Openid);
+    scope.insert(OPENID);
 
     let auth_request = FullAuthorizationRequest {
         inner: AuthorizationRequest {
@@ -264,7 +264,7 @@ fn build_authorization_request(
             redirect_uri: Some(redirect_uri.clone()),
             scope,
             state: Some(state.clone()),
-            response_mode: None,
+            response_mode,
             nonce: Some(nonce.clone()),
             display,
             prompt,
@@ -320,7 +320,6 @@ fn build_authorization_request(
 ///
 /// [`VerifiedClientMetadata`]: oauth2_types::registration::VerifiedClientMetadata
 /// [`ClientErrorCode`]: oauth2_types::errors::ClientErrorCode
-#[allow(clippy::too_many_lines)]
 pub fn build_authorization_url(
     authorization_endpoint: Url,
     authorization_data: AuthorizationRequestData,
@@ -353,115 +352,6 @@ pub fn build_authorization_url(
     Ok((authorization_url, validation_data))
 }
 
-/// Make a [Pushed Authorization Request] and build the URL for authenticating
-/// at the Authorization endpoint.
-///
-/// # Arguments
-///
-/// * `http_service` - The service to use for making HTTP requests.
-///
-/// * `client_credentials` - The credentials obtained when registering the
-///   client.
-///
-/// * `par_endpoint` - The URL of the issuer's Pushed Authorization Request
-///   endpoint.
-///
-/// * `authorization_endpoint` - The URL of the issuer's Authorization endpoint.
-///
-/// * `authorization_data` - The data necessary to build the authorization
-///   request.
-///
-/// * `now` - The current time.
-///
-/// * `rng` - A random number generator.
-///
-/// # Returns
-///
-/// A URL to be opened in a web browser where the end-user will be able to
-/// authorize the given scope, and the [`AuthorizationValidationData`] to
-/// validate this request.
-///
-/// The redirect URI will receive parameters in its query:
-///
-/// * A successful response will receive a `code` and a `state`.
-///
-/// * If the authorization fails, it should receive an `error` parameter with a
-///   [`ClientErrorCode`] and optionally an `error_description`.
-///
-/// # Errors
-///
-/// Returns an error if the request fails, the response is invalid or building
-/// the URL fails.
-///
-/// [Pushed Authorization Request]: https://oauth.net/2/pushed-authorization-requests/
-/// [`ClientErrorCode`]: oauth2_types::errors::ClientErrorCode
-#[tracing::instrument(skip_all, fields(par_endpoint))]
-pub async fn build_par_authorization_url(
-    http_service: &HttpService,
-    client_credentials: ClientCredentials,
-    par_endpoint: &Url,
-    authorization_endpoint: Url,
-    authorization_data: AuthorizationRequestData,
-    now: DateTime<Utc>,
-    rng: &mut impl Rng,
-) -> Result<(Url, AuthorizationValidationData), AuthorizationError> {
-    tracing::debug!(
-        scope = ?authorization_data.scope,
-        "Authorizing with a PAR..."
-    );
-
-    let client_id = client_credentials.client_id().to_owned();
-
-    let (authorization_request, validation_data) =
-        build_authorization_request(authorization_data, rng)?;
-
-    let par_request = http::Request::post(par_endpoint.as_str())
-        .header(CONTENT_TYPE, mime::APPLICATION_WWW_FORM_URLENCODED.as_ref())
-        .body(authorization_request)
-        .map_err(PushedAuthorizationError::from)?;
-
-    let par_request = client_credentials
-        .apply_to_request(par_request, now, rng)
-        .map_err(PushedAuthorizationError::from)?;
-
-    let service = (
-        FormUrlencodedRequestLayer::default(),
-        JsonResponseLayer::<PushedAuthorizationResponse>::default(),
-        CatchHttpCodesLayer::new(http_all_error_status_codes(), http_error_mapper),
-    )
-        .layer(http_service.clone());
-
-    let par_response = service
-        .ready_oneshot()
-        .await
-        .map_err(PushedAuthorizationError::from)?
-        .call(par_request)
-        .await
-        .map_err(PushedAuthorizationError::from)?
-        .into_body();
-
-    let authorization_query = serde_urlencoded::to_string([
-        ("request_uri", par_response.request_uri.as_str()),
-        ("client_id", &client_id),
-    ])?;
-
-    let mut authorization_url = authorization_endpoint;
-
-    // Add our parameters to the query, because the URL might already have one.
-    let mut full_query = authorization_url
-        .query()
-        .map(ToOwned::to_owned)
-        .unwrap_or_default();
-    if !full_query.is_empty() {
-        full_query.push('&');
-    }
-    full_query.push_str(&authorization_query);
-
-    authorization_url.set_query(Some(&full_query));
-
-    Ok((authorization_url, validation_data))
-}
-
 /// Exchange an authorization code for an access token.
 ///
 /// This should be used as the first step for logging in, and to request a
@@ -469,7 +359,7 @@ pub async fn build_par_authorization_url(
 ///
 /// # Arguments
 ///
-/// * `http_service` - The service to use for making HTTP requests.
+/// * `http_client` - The reqwest client to use for making HTTP requests.
 ///
 /// * `client_credentials` - The credentials obtained when registering the
 ///   client.
@@ -502,7 +392,7 @@ pub async fn build_par_authorization_url(
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(token_endpoint))]
 pub async fn access_token_with_authorization_code(
-    http_service: &HttpService,
+    http_client: &reqwest::Client,
     client_credentials: ClientCredentials,
     token_endpoint: &Url,
     code: String,
@@ -514,7 +404,7 @@ pub async fn access_token_with_authorization_code(
     tracing::debug!("Exchanging authorization code for access token...");
 
     let token_response = request_access_token(
-        http_service,
+        http_client,
         client_credentials,
         token_endpoint,
         AccessTokenRequest::AuthorizationCode(AuthorizationCodeGrant {

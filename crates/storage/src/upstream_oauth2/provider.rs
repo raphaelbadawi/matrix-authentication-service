@@ -9,9 +9,10 @@ use std::marker::PhantomData;
 use async_trait::async_trait;
 use mas_data_model::{
     UpstreamOAuthProvider, UpstreamOAuthProviderClaimsImports, UpstreamOAuthProviderDiscoveryMode,
-    UpstreamOAuthProviderPkceMode,
+    UpstreamOAuthProviderPkceMode, UpstreamOAuthProviderResponseMode,
+    UpstreamOAuthProviderTokenAuthMethod,
 };
-use mas_iana::{jose::JsonWebSignatureAlg, oauth::OAuthClientAuthenticationMethod};
+use mas_iana::jose::JsonWebSignatureAlg;
 use oauth2_types::scope::Scope;
 use rand_core::RngCore;
 use ulid::Ulid;
@@ -35,11 +36,16 @@ pub struct UpstreamOAuthProviderParams {
     pub scope: Scope,
 
     /// The token endpoint authentication method
-    pub token_endpoint_auth_method: OAuthClientAuthenticationMethod,
+    pub token_endpoint_auth_method: UpstreamOAuthProviderTokenAuthMethod,
 
     /// The JWT signing algorithm to use when then `client_secret_jwt` or
     /// `private_key_jwt` authentication methods are used
     pub token_endpoint_signing_alg: Option<JsonWebSignatureAlg>,
+
+    /// Whether to fetch the user profile from the userinfo endpoint,
+    /// or to rely on the data returned in the `id_token` from the
+    /// `token_endpoint`.
+    pub fetch_userinfo: bool,
 
     /// The client ID to use when authenticating to the upstream
     pub client_id: String,
@@ -58,6 +64,10 @@ pub struct UpstreamOAuthProviderParams {
     /// discovered
     pub token_endpoint_override: Option<Url>,
 
+    /// The URL to use as the userinfo endpoint. If `None`, the URL will be
+    /// discovered
+    pub userinfo_endpoint_override: Option<Url>,
+
     /// The URL to use when fetching JWKS. If `None`, the URL will be discovered
     pub jwks_uri_override: Option<Url>,
 
@@ -66,6 +76,9 @@ pub struct UpstreamOAuthProviderParams {
 
     /// How should PKCE be used
     pub pkce_mode: UpstreamOAuthProviderPkceMode,
+
+    /// What response mode it should ask
+    pub response_mode: UpstreamOAuthProviderResponseMode,
 
     /// Additional parameters to include in the authorization request
     pub additional_authorization_parameters: Vec<(String, String)>,

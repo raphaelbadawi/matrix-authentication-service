@@ -68,6 +68,94 @@ If there is only one upstream provider configured and the local password databas
 
 This section contains sample configurations for popular OIDC providers.
 
+### Apple
+
+Sign-in with Apple uses special non-standard for authenticating clients, which requires a special configuration.
+
+```yaml
+upstream_oauth2:
+  providers:
+    - client_id: 01JAYS74TCG3BTWKADN5Q4518C
+      client_name: "<Service ID>" # TO BE FILLED
+      scope: "openid name email"
+      response_mode: "form_post"
+
+      token_endpoint_auth_method: "sign_in_with_apple"
+      sign_in_with_apple:
+        private_key: |
+          # Content of the PEM-encoded private key file, TO BE FILLED
+        team_id: "<Team ID>" # TO BE FILLED
+        key_id: "<Key ID>" # TO BE FILLED
+
+      claims_imports:
+        localpart:
+          action: ignore
+        displayname:
+          action: suggest
+          # SiWA passes down the user infos as query parameters in the callback
+          # which is available in the extra_callback_parameters variable
+          template: |
+            {%- set user = extra_callback_parameters["user"] | from_json -%}
+            {{- user.name.firstName }} {{ user.name.lastName -}}
+        email:
+          action: suggest
+```
+
+### Authelia
+
+These instructions assume that you have already enabled the OIDC provider support in [Authelia](https://www.authelia.com/).
+
+Add a client for MAS to Authelia's `configuration.yaml` (see the [Authelia OIDC documentation](https://www.authelia.com/configuration/identity-providers/openid-connect/clients/) for full details):
+
+```yaml
+identity_providers:
+  oidc:
+    clients:
+      - client_id: "<client-id>" # TO BE FILLED
+          client_name: Matrix
+          client_secret: "<client-secret>" # TO BE FILLED
+          public: false
+          redirect_uris:
+            - https://<mas-fqdn>/upstream/callback/<id>
+          scopes:
+            - openid
+            - groups
+            - profile
+            - email
+          grant_types:
+            - 'refresh_token'
+            - 'authorization_code'
+          response_types:
+            - code
+```
+
+Authentication service configuration:
+
+```yaml
+upstream_oauth2:
+  providers:
+  - id: <id>
+    human_name: Authelia
+    issuer: "https://<authelia-fqdn>" # TO BE FILLED W/O ANY TRAILING SLASHES
+    client_id: "<client-id>" # TO BE FILLED
+    client_secret: "<client-secret>" # TO BE FILLED
+    token_endpoint_auth_method: client_secret_basic
+    scope: "openid profile email"
+    discovery_mode: insecure
+    claims_imports:
+        localpart:
+          action: require
+          template: "{{ user.preferred_username }}"
+        displayname:
+          action: suggest
+          template: "{{ user.name }}"
+        email:
+          action: suggest
+          template: "{{ user.email }}"
+          set_email_verification: always
+```
+
+
 ### Authentik
 
 [Authentik](https://goauthentik.io/) is an open-source IdP solution.
@@ -266,8 +354,8 @@ upstream_oauth2:
 ### Microsoft Azure Active Directory
 
 Azure AD can act as an OpenID Connect Provider.
-Register a new application under *App registrations* in the Azure AD management console. 
-The `RedirectURI` for your application should point to your authentication service instance: 
+Register a new application under *App registrations* in the Azure AD management console.
+The `RedirectURI` for your application should point to your authentication service instance:
 `https://<auth-service-domain>/upstream/callback/<id>` where `<id>` is the same as in the config file.
 
 Go to *Certificates & secrets* and register a new client secret.
@@ -297,4 +385,3 @@ upstream_oauth2:
           template: "{{ user.email }}"
           set_email_verification: always
 ```
-

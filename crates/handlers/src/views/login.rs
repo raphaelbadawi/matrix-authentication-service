@@ -15,7 +15,7 @@ use mas_axum_utils::{
     csrf::{CsrfExt, CsrfToken, ProtectedForm},
     FancyError, SessionInfoExt,
 };
-use mas_data_model::{BrowserSession, UserAgent};
+use mas_data_model::{oauth2::LoginHint, BrowserSession, UserAgent};
 use mas_i18n::DataLocale;
 use mas_matrix::{BoxHomeserverConnection, HomeserverConnection, ProvisionRequest};
 use mas_router::{UpstreamOAuth2Authorize, UrlBuilder};
@@ -25,7 +25,8 @@ use mas_storage::{
     BoxClock, BoxRepository, BoxRng, Clock, Repository, RepositoryAccess, RepositoryError,
 };
 use mas_templates::{
-    FieldError, FormError, LoginContext, LoginFormField, TemplateContext, Templates, ToFormState,
+    FieldError, FormError, LoginContext, LoginFormField, PostAuthContext, PostAuthContextInner,
+    TemplateContext, Templates, ToFormState,
 };
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
@@ -57,6 +58,7 @@ pub(crate) async fn get(
     State(templates): State<Templates>,
     State(url_builder): State<UrlBuilder>,
     State(site_config): State<SiteConfig>,
+    State(homeserver): State<BoxHomeserverConnection>,
     mut repo: BoxRepository,
     activity_tracker: BoundActivityTracker,
     Query(query): Query<OptionalPostAuthAction>,
@@ -99,6 +101,7 @@ pub(crate) async fn get(
         csrf_token,
         &mut repo,
         &templates,
+        homeserver,
     )
     .await?;
 
@@ -160,6 +163,7 @@ pub(crate) async fn post(
             csrf_token,
             &mut repo,
             &templates,
+            homeserver,
         )
         .await?;
 
@@ -201,6 +205,7 @@ pub(crate) async fn post(
                 csrf_token,
                 &mut repo,
                 &templates,
+                homeserver,
             )
             .await?;
 
@@ -331,16 +336,40 @@ async fn login(
     Ok(user_session)
 }
 
+fn handle_login_hint(
+    ctx: &mut LoginContext,
+    next: &PostAuthContext,
+    homeserver: &BoxHomeserverConnection,
+) {
+    let form_state = ctx.form_state_mut();
+
+    // Do not override username if coming from a failed login attempt
+    if form_state.has_value(LoginFormField::Username) {
+        return;
+    }
+
+    if let PostAuthContextInner::ContinueAuthorizationGrant { ref grant } = next.ctx {
+        let value = match grant.parse_login_hint(homeserver.homeserver()) {
+            LoginHint::MXID(mxid) => Some(mxid.localpart().to_owned()),
+            LoginHint::None => None,
+        };
+        form_state.set_value(LoginFormField::Username, value);
+    }
+}
+
 async fn render(
     locale: DataLocale,
-    ctx: LoginContext,
+    mut ctx: LoginContext,
     action: OptionalPostAuthAction,
     csrf_token: CsrfToken,
     repo: &mut impl RepositoryAccess,
     templates: &Templates,
+    homeserver: BoxHomeserverConnection,
 ) -> Result<String, FancyError> {
     let next = action.load_context(repo).await?;
     let ctx = if let Some(next) = next {
+        handle_login_hint(&mut ctx, &next, &homeserver);
+
         ctx.with_post_action(next)
     } else {
         ctx
@@ -357,8 +386,9 @@ mod test {
         header::{CONTENT_TYPE, LOCATION},
         Request, StatusCode,
     };
-    use mas_data_model::UpstreamOAuthProviderClaimsImports;
-    use mas_iana::oauth::OAuthClientAuthenticationMethod;
+    use mas_data_model::{
+        UpstreamOAuthProviderClaimsImports, UpstreamOAuthProviderTokenAuthMethod,
+    };
     use mas_router::Route;
     use mas_storage::{
         upstream_oauth2::{UpstreamOAuthProviderParams, UpstreamOAuthProviderRepository},
@@ -414,16 +444,19 @@ mod test {
                     human_name: Some("First Ltd.".to_owned()),
                     brand_name: None,
                     scope: [OPENID].into_iter().collect(),
-                    token_endpoint_auth_method: OAuthClientAuthenticationMethod::None,
+                    token_endpoint_auth_method: UpstreamOAuthProviderTokenAuthMethod::None,
                     token_endpoint_signing_alg: None,
+                    fetch_userinfo: false,
                     client_id: "client".to_owned(),
                     encrypted_client_secret: None,
                     claims_imports: UpstreamOAuthProviderClaimsImports::default(),
                     authorization_endpoint_override: None,
                     token_endpoint_override: None,
+                    userinfo_endpoint_override: None,
                     jwks_uri_override: None,
                     discovery_mode: mas_data_model::UpstreamOAuthProviderDiscoveryMode::Oidc,
                     pkce_mode: mas_data_model::UpstreamOAuthProviderPkceMode::Auto,
+                    response_mode: mas_data_model::UpstreamOAuthProviderResponseMode::Query,
                     additional_authorization_parameters: Vec::new(),
                 },
             )
@@ -449,16 +482,19 @@ mod test {
                     human_name: None,
                     brand_name: None,
                     scope: [OPENID].into_iter().collect(),
-                    token_endpoint_auth_method: OAuthClientAuthenticationMethod::None,
+                    token_endpoint_auth_method: UpstreamOAuthProviderTokenAuthMethod::None,
                     token_endpoint_signing_alg: None,
+                    fetch_userinfo: false,
                     client_id: "client".to_owned(),
                     encrypted_client_secret: None,
                     claims_imports: UpstreamOAuthProviderClaimsImports::default(),
                     authorization_endpoint_override: None,
                     token_endpoint_override: None,
+                    userinfo_endpoint_override: None,
                     jwks_uri_override: None,
                     discovery_mode: mas_data_model::UpstreamOAuthProviderDiscoveryMode::Oidc,
                     pkce_mode: mas_data_model::UpstreamOAuthProviderPkceMode::Auto,
+                    response_mode: mas_data_model::UpstreamOAuthProviderResponseMode::Query,
                     additional_authorization_parameters: Vec::new(),
                 },
             )

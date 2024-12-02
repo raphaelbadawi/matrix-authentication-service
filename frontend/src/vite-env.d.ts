@@ -5,4 +5,3 @@
 // Please see LICENSE in the repository root for full details.
 
 /// <reference types="vite/client" />
-/// <reference types="vite-plugin-svgr/client" />

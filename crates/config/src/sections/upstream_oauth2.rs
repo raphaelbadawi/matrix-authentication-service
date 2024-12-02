@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use mas_iana::{jose::JsonWebSignatureAlg, oauth::OAuthClientAuthenticationMethod};
+use mas_iana::jose::JsonWebSignatureAlg;
 use schemars::JsonSchema;
 use serde::{de::Error, Deserialize, Serialize};
 use serde_with::skip_serializing_none;
@@ -48,7 +48,9 @@ impl ConfigurationSection for UpstreamOAuth2Config {
             };
 
             match provider.token_endpoint_auth_method {
-                TokenAuthMethod::None | TokenAuthMethod::PrivateKeyJwt => {
+                TokenAuthMethod::None
+                | TokenAuthMethod::PrivateKeyJwt
+                | TokenAuthMethod::SignInWithApple => {
                     if provider.client_secret.is_some() {
                         return annotate(figment::Error::custom("Unexpected field `client_secret` for the selected authentication method"));
                     }
@@ -65,7 +67,8 @@ impl ConfigurationSection for UpstreamOAuth2Config {
             match provider.token_endpoint_auth_method {
                 TokenAuthMethod::None
                 | TokenAuthMethod::ClientSecretBasic
-                | TokenAuthMethod::ClientSecretPost => {
+                | TokenAuthMethod::ClientSecretPost
+                | TokenAuthMethod::SignInWithApple => {
                     if provider.token_endpoint_auth_signing_alg.is_some() {
                         return annotate(figment::Error::custom(
                             "Unexpected field `token_endpoint_auth_signing_alg` for the selected authentication method",
@@ -80,9 +83,48 @@ impl ConfigurationSection for UpstreamOAuth2Config {
                     }
                 }
             }
+
+            match provider.token_endpoint_auth_method {
+                TokenAuthMethod::SignInWithApple => {
+                    if provider.sign_in_with_apple.is_none() {
+                        return annotate(figment::Error::missing_field("sign_in_with_apple"));
+                    }
+                }
+
+                _ => {
+                    if provider.sign_in_with_apple.is_some() {
+                        return annotate(figment::Error::custom(
+                            "Unexpected field `sign_in_with_apple` for the selected authentication method",
+                        ));
+                    }
+                }
+            }
         }
 
         Ok(())
+    }
+}
+
+/// The response mode we ask the provider to use for the callback
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseMode {
+    /// `query`: The provider will send the response as a query string in the
+    /// URL search parameters
+    #[default]
+    Query,
+
+    /// `form_post`: The provider will send the response as a POST request with
+    /// the response parameters in the request body
+    ///
+    /// <https://openid.net/specs/oauth-v2-form-post-response-mode-1_0.html>
+    FormPost,
+}
+
+impl ResponseMode {
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    const fn is_default(&self) -> bool {
+        matches!(self, ResponseMode::Query)
     }
 }
 
@@ -108,20 +150,9 @@ pub enum TokenAuthMethod {
     /// `private_key_jwt`: a `client_assertion` sent in the request body and
     /// signed by an asymmetric key
     PrivateKeyJwt,
-}
 
-impl From<TokenAuthMethod> for OAuthClientAuthenticationMethod {
-    fn from(method: TokenAuthMethod) -> Self {
-        match method {
-            TokenAuthMethod::None => OAuthClientAuthenticationMethod::None,
-            TokenAuthMethod::ClientSecretBasic => {
-                OAuthClientAuthenticationMethod::ClientSecretBasic
-            }
-            TokenAuthMethod::ClientSecretPost => OAuthClientAuthenticationMethod::ClientSecretPost,
-            TokenAuthMethod::ClientSecretJwt => OAuthClientAuthenticationMethod::ClientSecretJwt,
-            TokenAuthMethod::PrivateKeyJwt => OAuthClientAuthenticationMethod::PrivateKeyJwt,
-        }
-    }
+    /// `sign_in_with_apple`: a special method for Signin with Apple
+    SignInWithApple,
 }
 
 /// How to handle a claim
@@ -254,6 +285,23 @@ impl EmailImportPreference {
     }
 }
 
+/// What should be done for the account name attribute
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
+pub struct AccountNameImportPreference {
+    /// The Jinja2 template to use for the account name. This name is only used
+    /// for display purposes.
+    ///
+    /// If not provided, it will be ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+}
+
+impl AccountNameImportPreference {
+    const fn is_default(&self) -> bool {
+        self.template.is_none()
+    }
+}
+
 /// How claims should be imported
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
 pub struct ClaimsImports {
@@ -276,6 +324,13 @@ pub struct ClaimsImports {
     /// `email_verified` claims
     #[serde(default, skip_serializing_if = "EmailImportPreference::is_default")]
     pub email: EmailImportPreference,
+
+    /// Set a human-readable name for the upstream account for display purposes
+    #[serde(
+        default,
+        skip_serializing_if = "AccountNameImportPreference::is_default"
+    )]
+    pub account_name: AccountNameImportPreference,
 }
 
 impl ClaimsImports {
@@ -343,6 +398,18 @@ fn is_default_true(value: &bool) -> bool {
     *value
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SignInWithApple {
+    /// The private key used to sign the `id_token`
+    pub private_key: String,
+
+    /// The Team ID of the Apple Developer Portal
+    pub team_id: String,
+
+    /// The key ID of the Apple Developer Portal
+    pub key_id: String,
+}
+
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Provider {
@@ -394,6 +461,10 @@ pub struct Provider {
     /// The method to authenticate the client with the provider
     pub token_endpoint_auth_method: TokenAuthMethod,
 
+    /// Additional parameters for the `sign_in_with_apple` method
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sign_in_with_apple: Option<SignInWithApple>,
+
     /// The JWS algorithm to use when authenticating the client with the
     /// provider
     ///
@@ -418,11 +489,25 @@ pub struct Provider {
     #[serde(default, skip_serializing_if = "PkceMethod::is_default")]
     pub pkce_method: PkceMethod,
 
+    /// Whether to fetch the user profile from the userinfo endpoint,
+    /// or to rely on the data returned in the `id_token` from the
+    /// `token_endpoint`.
+    ///
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub fetch_userinfo: bool,
+
     /// The URL to use for the provider's authorization endpoint
     ///
     /// Defaults to the `authorization_endpoint` provided through discovery
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization_endpoint: Option<Url>,
+
+    /// The URL to use for the provider's userinfo endpoint
+    ///
+    /// Defaults to the `userinfo_endpoint` provided through discovery
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub userinfo_endpoint: Option<Url>,
 
     /// The URL to use for the provider's token endpoint
     ///
@@ -435,6 +520,10 @@ pub struct Provider {
     /// Defaults to the `jwks_uri` provided through discovery
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwks_uri: Option<Url>,
+
+    /// The response mode we ask the provider to use for the callback
+    #[serde(default, skip_serializing_if = "ResponseMode::is_default")]
+    pub response_mode: ResponseMode,
 
     /// How claims should be imported from the `id_token` provided by the
     /// provider

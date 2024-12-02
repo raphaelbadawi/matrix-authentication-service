@@ -4,32 +4,78 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Please see LICENSE in the repository root for full details.
 
-import { cacheExchange, createClient, fetchExchange } from "@urql/core";
-import { devtoolsExchange } from "@urql/devtools";
-import { refocusExchange } from "@urql/exchange-refocus";
-import { requestPolicyExchange } from "@urql/exchange-request-policy";
-
+import { QueryClient } from "@tanstack/react-query";
+import type { ExecutionResult } from "graphql";
 import appConfig from "./config";
+import type { TypedDocumentString } from "./gql/graphql";
 
-const exchanges = [
-  // This sets the policy to 'cache-and-network' after 5 minutes
-  requestPolicyExchange({
-    ttl: 1000 * 60 * 5, // 5 minute
-  }),
+let graphqlEndpoint: string;
+if (import.meta.env.TEST && typeof window === "undefined") {
+  graphqlEndpoint = new URL(
+    appConfig.graphqlEndpoint,
+    "http:://localhost/",
+  ).toString();
+} else {
+  graphqlEndpoint = new URL(
+    appConfig.graphqlEndpoint,
+    window.location.toString(),
+  ).toString();
+}
 
-  // This refetches all queries when the tab is refocused
-  refocusExchange(),
+type RequestOptions<TData, TVariables> = {
+  query: TypedDocumentString<TData, TVariables>;
+  signal?: AbortSignal;
+  // biome-ignore lint/suspicious/noExplicitAny: this is for inference
+} & (TVariables extends Record<any, never>
+  ? { variables?: TVariables }
+  : { variables: TVariables });
 
-  // Simple cache
-  cacheExchange,
+export const graphqlRequest = async <TData, TVariables>({
+  query,
+  variables,
+  signal,
+}: RequestOptions<TData, TVariables>): Promise<TData> => {
+  let response: Response;
+  try {
+    response = await fetch(graphqlEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query,
+        variables,
+      }),
+      signal,
+    });
+  } catch (cause) {
+    throw new Error(`GraphQL request to ${graphqlEndpoint} request failed`, {
+      cause,
+    });
+  }
 
-  // Use `fetch` to execute the requests
-  fetchExchange,
-];
+  if (!response.ok) {
+    throw new Error(
+      `GraphQL request to ${graphqlEndpoint} failed: ${response.status}`,
+    );
+  }
 
-export const client = createClient({
-  url: appConfig.graphqlEndpoint,
-  suspense: true,
-  // Add the devtools exchange in development
-  exchanges: import.meta.env.DEV ? [devtoolsExchange, ...exchanges] : exchanges,
+  const json: ExecutionResult<TData> = await response.json();
+  if (json.errors) {
+    throw new Error(JSON.stringify(json.errors));
+  }
+
+  if (!json.data) {
+    throw new Error(`GraphQL request to ${graphqlEndpoint} returned no data`);
+  }
+
+  return json.data;
+};
+
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    mutations: {
+      throwOnError: true,
+    },
+  },
 });

@@ -20,12 +20,14 @@ use chrono::{DateTime, Duration, Utc};
 use http::{Method, Uri, Version};
 use mas_data_model::{
     AuthorizationGrant, BrowserSession, Client, CompatSsoLogin, CompatSsoLoginState,
-    DeviceCodeGrant, UpstreamOAuthLink, UpstreamOAuthProvider, User, UserAgent, UserEmail,
-    UserEmailVerification, UserRecoverySession,
+    DeviceCodeGrant, UpstreamOAuthLink, UpstreamOAuthProvider, UpstreamOAuthProviderClaimsImports,
+    UpstreamOAuthProviderDiscoveryMode, UpstreamOAuthProviderPkceMode,
+    UpstreamOAuthProviderResponseMode, UpstreamOAuthProviderTokenAuthMethod, User, UserAgent,
+    UserEmail, UserEmailVerification, UserRecoverySession,
 };
 use mas_i18n::DataLocale;
 use mas_router::{Account, GraphQL, PostAuthAction, UrlBuilder};
-use oauth2_types::scope::OPENID;
+use oauth2_types::scope::{Scope, OPENID};
 use rand::{
     distributions::{Alphanumeric, DistString},
     Rng,
@@ -480,6 +482,11 @@ impl LoginContext {
     #[must_use]
     pub fn with_form_state(self, form: FormState<LoginFormField>) -> Self {
         Self { form, ..self }
+    }
+
+    /// Mutably borrow the form state
+    pub fn form_state_mut(&mut self) -> &mut FormState<LoginFormField> {
+        &mut self.form
     }
 
     /// Set the upstream OAuth 2.0 providers
@@ -1272,8 +1279,10 @@ impl FormField for UpstreamRegisterFormField {
 
 /// Context used by the `pages/upstream_oauth2/do_register.html`
 /// templates
-#[derive(Serialize, Default)]
+#[derive(Serialize)]
 pub struct UpstreamRegister {
+    upstream_oauth_link: UpstreamOAuthLink,
+    upstream_oauth_provider: UpstreamOAuthProvider,
     imported_localpart: Option<String>,
     force_localpart: bool,
     imported_display_name: Option<String>,
@@ -1284,10 +1293,24 @@ pub struct UpstreamRegister {
 }
 
 impl UpstreamRegister {
-    /// Constructs a new context with an existing linked user
+    /// Constructs a new context for registering a new user from an upstream
+    /// provider
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(
+        upstream_oauth_link: UpstreamOAuthLink,
+        upstream_oauth_provider: UpstreamOAuthProvider,
+    ) -> Self {
+        Self {
+            upstream_oauth_link,
+            upstream_oauth_provider,
+            imported_localpart: None,
+            force_localpart: false,
+            imported_display_name: None,
+            force_display_name: false,
+            imported_email: None,
+            force_email: false,
+            form_state: FormState::default(),
+        }
     }
 
     /// Set the imported localpart
@@ -1351,11 +1374,43 @@ impl UpstreamRegister {
 }
 
 impl TemplateContext for UpstreamRegister {
-    fn sample(_now: chrono::DateTime<Utc>, _rng: &mut impl Rng) -> Vec<Self>
+    fn sample(now: chrono::DateTime<Utc>, _rng: &mut impl Rng) -> Vec<Self>
     where
         Self: Sized,
     {
-        vec![Self::new()]
+        vec![Self::new(
+            UpstreamOAuthLink {
+                id: Ulid::nil(),
+                provider_id: Ulid::nil(),
+                user_id: None,
+                subject: "subject".to_owned(),
+                human_account_name: Some("@john".to_owned()),
+                created_at: now,
+            },
+            UpstreamOAuthProvider {
+                id: Ulid::nil(),
+                issuer: "https://example.com/".to_owned(),
+                human_name: Some("Example Ltd.".to_owned()),
+                brand_name: None,
+                scope: Scope::from_iter([OPENID]),
+                token_endpoint_auth_method: UpstreamOAuthProviderTokenAuthMethod::ClientSecretBasic,
+                token_endpoint_signing_alg: None,
+                client_id: "client-id".to_owned(),
+                encrypted_client_secret: None,
+                claims_imports: UpstreamOAuthProviderClaimsImports::default(),
+                authorization_endpoint_override: None,
+                token_endpoint_override: None,
+                jwks_uri_override: None,
+                userinfo_endpoint_override: None,
+                fetch_userinfo: false,
+                discovery_mode: UpstreamOAuthProviderDiscoveryMode::Oidc,
+                pkce_mode: UpstreamOAuthProviderPkceMode::Auto,
+                response_mode: UpstreamOAuthProviderResponseMode::Query,
+                additional_authorization_parameters: Vec::new(),
+                created_at: now,
+                disabled_at: None,
+            },
+        )]
     }
 }
 
@@ -1455,7 +1510,7 @@ impl TemplateContext for DeviceConsentContext {
 /// Context used by the `form_post.html` template
 #[derive(Serialize)]
 pub struct FormPostContext<T> {
-    redirect_uri: Url,
+    redirect_uri: Option<Url>,
     params: T,
 }
 
@@ -1468,7 +1523,7 @@ impl<T: TemplateContext> TemplateContext for FormPostContext<T> {
         sample_params
             .into_iter()
             .map(|params| FormPostContext {
-                redirect_uri: "https://example.com/callback".parse().unwrap(),
+                redirect_uri: "https://example.com/callback".parse().ok(),
                 params,
             })
             .collect()
@@ -1476,11 +1531,32 @@ impl<T: TemplateContext> TemplateContext for FormPostContext<T> {
 }
 
 impl<T> FormPostContext<T> {
-    /// Constructs a context for the `form_post` response mode form
-    pub fn new(redirect_uri: Url, params: T) -> Self {
+    /// Constructs a context for the `form_post` response mode form for a given
+    /// URL
+    pub fn new_for_url(redirect_uri: Url, params: T) -> Self {
         Self {
-            redirect_uri,
+            redirect_uri: Some(redirect_uri),
             params,
+        }
+    }
+
+    /// Constructs a context for the `form_post` response mode form for the
+    /// current URL
+    pub fn new_for_current_url(params: T) -> Self {
+        Self {
+            redirect_uri: None,
+            params,
+        }
+    }
+
+    /// Add the language to the context
+    ///
+    /// This is usually implemented by the [`TemplateContext`] trait, but it is
+    /// annoying to make it work because of the generic parameter
+    pub fn with_language(self, lang: &DataLocale) -> WithLanguage<Self> {
+        WithLanguage {
+            lang: lang.to_string(),
+            inner: self,
         }
     }
 }

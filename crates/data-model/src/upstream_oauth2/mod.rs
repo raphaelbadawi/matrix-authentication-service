@@ -16,8 +16,10 @@ pub use self::{
         ImportAction as UpstreamOAuthProviderImportAction,
         ImportPreference as UpstreamOAuthProviderImportPreference,
         PkceMode as UpstreamOAuthProviderPkceMode,
+        ResponseMode as UpstreamOAuthProviderResponseMode,
         SetEmailVerification as UpsreamOAuthProviderSetEmailVerification,
-        SubjectPreference as UpstreamOAuthProviderSubjectPreference, UpstreamOAuthProvider,
+        SubjectPreference as UpstreamOAuthProviderSubjectPreference,
+        TokenAuthMethod as UpstreamOAuthProviderTokenAuthMethod, UpstreamOAuthProvider,
     },
     session::{UpstreamOAuthAuthorizationSession, UpstreamOAuthAuthorizationSessionState},
 };

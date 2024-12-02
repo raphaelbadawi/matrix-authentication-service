@@ -6,22 +6,20 @@
 
 use std::collections::HashMap;
 
-use assert_matches::assert_matches;
 use base64ct::Encoding;
+use http::header::AUTHORIZATION;
 use mas_iana::oauth::{OAuthAccessTokenType, OAuthClientAuthenticationMethod};
 use mas_jose::{
     claims::{self, TimeOptions},
     jwt::Jwt,
 };
 use mas_oidc_client::{
-    error::{CredentialsError, TokenRequestError},
     requests::client_credentials::access_token_with_client_credentials,
     types::client_credentials::ClientCredentials,
 };
 use oauth2_types::requests::AccessTokenResponse;
 use rand::SeedableRng;
 use serde_json::Value;
-use tower::BoxError;
 use wiremock::{
     matchers::{header, method, path},
     Mock, Request, ResponseTemplate,
@@ -31,9 +29,8 @@ use crate::{client_credentials, init_test, now, ACCESS_TOKEN, CLIENT_ID, CLIENT_
 
 #[tokio::test]
 async fn pass_none() {
-    let (http_service, mock_server, issuer) = init_test().await;
-    let client_credentials =
-        client_credentials(&OAuthClientAuthenticationMethod::None, &issuer, None);
+    let (http_client, mock_server, issuer) = init_test().await;
+    let client_credentials = client_credentials(&OAuthClientAuthenticationMethod::None, &issuer);
     let token_endpoint = issuer.join("token").unwrap();
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
@@ -67,7 +64,7 @@ async fn pass_none() {
         .await;
 
     access_token_with_client_credentials(
-        &http_service,
+        &http_client,
         client_credentials,
         &token_endpoint,
         None,
@@ -80,12 +77,9 @@ async fn pass_none() {
 
 #[tokio::test]
 async fn pass_client_secret_basic() {
-    let (http_service, mock_server, issuer) = init_test().await;
-    let client_credentials = client_credentials(
-        &OAuthClientAuthenticationMethod::ClientSecretBasic,
-        &issuer,
-        None,
-    );
+    let (http_client, mock_server, issuer) = init_test().await;
+    let client_credentials =
+        client_credentials(&OAuthClientAuthenticationMethod::ClientSecretBasic, &issuer);
     let token_endpoint = issuer.join("token").unwrap();
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
@@ -97,7 +91,7 @@ async fn pass_client_secret_basic() {
 
     Mock::given(method("POST"))
         .and(path("/token"))
-        .and(header("authorization", authorization_header.as_str()))
+        .and(header(AUTHORIZATION, authorization_header.as_str()))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(AccessTokenResponse {
                 access_token: ACCESS_TOKEN.to_owned(),
@@ -112,7 +106,7 @@ async fn pass_client_secret_basic() {
         .await;
 
     access_token_with_client_credentials(
-        &http_service,
+        &http_client,
         client_credentials,
         &token_endpoint,
         None,
@@ -125,12 +119,9 @@ async fn pass_client_secret_basic() {
 
 #[tokio::test]
 async fn pass_client_secret_post() {
-    let (http_service, mock_server, issuer) = init_test().await;
-    let client_credentials = client_credentials(
-        &OAuthClientAuthenticationMethod::ClientSecretPost,
-        &issuer,
-        None,
-    );
+    let (http_client, mock_server, issuer) = init_test().await;
+    let client_credentials =
+        client_credentials(&OAuthClientAuthenticationMethod::ClientSecretPost, &issuer);
     let token_endpoint = issuer.join("token").unwrap();
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
@@ -172,7 +163,7 @@ async fn pass_client_secret_post() {
         .await;
 
     access_token_with_client_credentials(
-        &http_service,
+        &http_client,
         client_credentials,
         &token_endpoint,
         None,
@@ -185,12 +176,9 @@ async fn pass_client_secret_post() {
 
 #[tokio::test]
 async fn pass_client_secret_jwt() {
-    let (http_service, mock_server, issuer) = init_test().await;
-    let client_credentials = client_credentials(
-        &OAuthClientAuthenticationMethod::ClientSecretJwt,
-        &issuer,
-        None,
-    );
+    let (http_client, mock_server, issuer) = init_test().await;
+    let client_credentials =
+        client_credentials(&OAuthClientAuthenticationMethod::ClientSecretJwt, &issuer);
     let token_endpoint = issuer.join("token").unwrap();
     let endpoint = token_endpoint.to_string();
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
@@ -253,7 +241,7 @@ async fn pass_client_secret_jwt() {
         .await;
 
     access_token_with_client_credentials(
-        &http_service,
+        &http_client,
         client_credentials,
         &token_endpoint,
         None,
@@ -265,26 +253,18 @@ async fn pass_client_secret_jwt() {
 }
 
 #[tokio::test]
-async fn pass_private_key_jwt_with_keystore() {
-    let (http_service, mock_server, issuer) = init_test().await;
-    let client_credentials = client_credentials(
-        &OAuthClientAuthenticationMethod::PrivateKeyJwt,
-        &issuer,
-        None,
-    );
+async fn pass_private_key_jwt() {
+    let (http_client, mock_server, issuer) = init_test().await;
+    let client_credentials =
+        client_credentials(&OAuthClientAuthenticationMethod::PrivateKeyJwt, &issuer);
     let token_endpoint = issuer.join("token").unwrap();
     let endpoint = token_endpoint.to_string();
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-    let client_jwks = if let ClientCredentials::PrivateKeyJwt {
-        jwt_signing_method, ..
-    } = &client_credentials
-    {
-        let keystore = jwt_signing_method.keystore().unwrap();
-        keystore.public_jwks()
-    } else {
+    let ClientCredentials::PrivateKeyJwt { keystore, .. } = &client_credentials else {
         panic!("should be PrivateKeyJwt")
     };
+    let client_jwks = keystore.public_jwks();
 
     Mock::given(method("POST"))
         .and(path("/token"))
@@ -341,7 +321,7 @@ async fn pass_private_key_jwt_with_keystore() {
         .await;
 
     access_token_with_client_credentials(
-        &http_service,
+        &http_client,
         client_credentials,
         &token_endpoint,
         None,
@@ -350,109 +330,12 @@ async fn pass_private_key_jwt_with_keystore() {
     )
     .await
     .unwrap();
-}
-
-#[tokio::test]
-async fn pass_private_key_jwt_with_custom_signing() {
-    let (http_service, mock_server, issuer) = init_test().await;
-    let client_credentials = client_credentials(
-        &OAuthClientAuthenticationMethod::PrivateKeyJwt,
-        &issuer,
-        Some(Box::new(|_claims, _alg| Ok("fake.signed.jwt".to_owned()))),
-    );
-    let token_endpoint = issuer.join("token").unwrap();
-    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
-
-    Mock::given(method("POST"))
-        .and(path("/token"))
-        .and(move |req: &Request| {
-            let query_pairs = form_urlencoded::parse(&req.body).collect::<HashMap<_, _>>();
-
-            if query_pairs
-                .get("client_id")
-                .filter(|s| *s == CLIENT_ID)
-                .is_none()
-            {
-                println!("Wrong or missing client ID");
-                return false;
-            }
-            if query_pairs
-                .get("client_assertion_type")
-                .filter(|s| *s == "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
-                .is_none()
-            {
-                println!("Wrong or missing client assertion type");
-                return false;
-            }
-
-            if query_pairs
-                .get("client_assertion")
-                .filter(|s| *s == "fake.signed.jwt")
-                .is_none()
-            {
-                println!("Wrong or missing client assertion");
-                return false;
-            }
-
-            true
-        })
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(AccessTokenResponse {
-                access_token: ACCESS_TOKEN.to_owned(),
-                refresh_token: None,
-                id_token: None,
-                token_type: OAuthAccessTokenType::Bearer,
-                expires_in: None,
-                scope: None,
-            }),
-        )
-        .mount(&mock_server)
-        .await;
-
-    access_token_with_client_credentials(
-        &http_service,
-        client_credentials,
-        &token_endpoint,
-        None,
-        now(),
-        &mut rng,
-    )
-    .await
-    .unwrap();
-}
-
-#[tokio::test]
-async fn fail_private_key_jwt_with_custom_signing() {
-    let (http_service, _, issuer) = init_test().await;
-    let client_credentials = client_credentials(
-        &OAuthClientAuthenticationMethod::PrivateKeyJwt,
-        &issuer,
-        Some(Box::new(|_claims, _alg| Err("Something went wrong".into()))),
-    );
-    let token_endpoint = issuer.join("token").unwrap();
-    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
-
-    let error = access_token_with_client_credentials(
-        &http_service,
-        client_credentials,
-        &token_endpoint,
-        None,
-        now(),
-        &mut rng,
-    )
-    .await
-    .unwrap_err();
-
-    assert_matches!(
-        error,
-        TokenRequestError::Credentials(CredentialsError::Custom(_))
-    );
 }
 
 fn verify_client_jwt(
     claims: &mut HashMap<String, Value>,
     token_endpoint: &String,
-) -> Result<(), BoxError> {
+) -> Result<(), Box<dyn std::error::Error>> {
     claims::ISS.extract_required_with_options(claims, CLIENT_ID)?;
 
     let sub = claims::SUB.extract_required(claims)?;

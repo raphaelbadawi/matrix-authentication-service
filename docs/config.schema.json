@@ -1885,6 +1885,14 @@
             }
           ]
         },
+        "sign_in_with_apple": {
+          "description": "Additional parameters for the `sign_in_with_apple` method",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SignInWithApple"
+            }
+          ]
+        },
         "token_endpoint_auth_signing_alg": {
           "description": "The JWS algorithm to use when authenticating the client with the provider\n\nUsed by the `client_secret_jwt` and `private_key_jwt` methods",
           "allOf": [
@@ -1913,8 +1921,18 @@
             }
           ]
         },
+        "fetch_userinfo": {
+          "description": "Whether to fetch the user profile from the userinfo endpoint, or to rely on the data returned in the `id_token` from the `token_endpoint`.\n\nDefaults to `false`.",
+          "default": false,
+          "type": "boolean"
+        },
         "authorization_endpoint": {
           "description": "The URL to use for the provider's authorization endpoint\n\nDefaults to the `authorization_endpoint` provided through discovery",
+          "type": "string",
+          "format": "uri"
+        },
+        "userinfo_endpoint": {
+          "description": "The URL to use for the provider's userinfo endpoint\n\nDefaults to the `userinfo_endpoint` provided through discovery",
           "type": "string",
           "format": "uri"
         },
@@ -1927,6 +1945,14 @@
           "description": "The URL to use for getting the provider's public keys\n\nDefaults to the `jwks_uri` provided through discovery",
           "type": "string",
           "format": "uri"
+        },
+        "response_mode": {
+          "description": "The response mode we ask the provider to use for the callback",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResponseMode"
+            }
+          ]
         },
         "claims_imports": {
           "description": "How claims should be imported from the `id_token` provided by the provider",
@@ -1982,8 +2008,37 @@
           "enum": [
             "private_key_jwt"
           ]
+        },
+        {
+          "description": "`sign_in_with_apple`: a special method for Signin with Apple",
+          "type": "string",
+          "enum": [
+            "sign_in_with_apple"
+          ]
         }
       ]
+    },
+    "SignInWithApple": {
+      "type": "object",
+      "required": [
+        "key_id",
+        "private_key",
+        "team_id"
+      ],
+      "properties": {
+        "private_key": {
+          "description": "The private key used to sign the `id_token`",
+          "type": "string"
+        },
+        "team_id": {
+          "description": "The Team ID of the Apple Developer Portal",
+          "type": "string"
+        },
+        "key_id": {
+          "description": "The key ID of the Apple Developer Portal",
+          "type": "string"
+        }
+      }
     },
     "DiscoveryMode": {
       "description": "How to discover the provider's configuration",
@@ -2037,6 +2092,25 @@
         }
       ]
     },
+    "ResponseMode": {
+      "description": "The response mode we ask the provider to use for the callback",
+      "oneOf": [
+        {
+          "description": "`query`: The provider will send the response as a query string in the URL search parameters",
+          "type": "string",
+          "enum": [
+            "query"
+          ]
+        },
+        {
+          "description": "`form_post`: The provider will send the response as a POST request with the response parameters in the request body\n\n<https://openid.net/specs/oauth-v2-form-post-response-mode-1_0.html>",
+          "type": "string",
+          "enum": [
+            "form_post"
+          ]
+        }
+      ]
+    },
     "ClaimsImports": {
       "description": "How claims should be imported",
       "type": "object",
@@ -2070,6 +2144,14 @@
           "allOf": [
             {
               "$ref": "#/definitions/EmailImportPreference"
+            }
+          ]
+        },
+        "account_name": {
+          "description": "Set a human-readable name for the upstream account for display purposes",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AccountNameImportPreference"
             }
           ]
         }
@@ -2205,6 +2287,16 @@
           ]
         }
       ]
+    },
+    "AccountNameImportPreference": {
+      "description": "What should be done for the account name attribute",
+      "type": "object",
+      "properties": {
+        "template": {
+          "description": "The Jinja2 template to use for the account name. This name is only used for display purposes.\n\nIf not provided, it will be ignored.",
+          "type": "string"
+        }
+      }
     },
     "BrandingConfig": {
       "description": "Configuration section for tweaking the branding of the service",

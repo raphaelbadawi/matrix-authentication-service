@@ -4,11 +4,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Please see LICENSE in the repository root for full details.
 
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { useTransition } from "react";
-import { useQuery } from "urql";
-
 import { type FragmentType, graphql, useFragment } from "../../gql";
+import { graphqlRequest } from "../../graphql";
 import {
+  type AnyPagination,
   FIRST_PAGE,
   type Pagination,
   usePages,
@@ -18,7 +19,7 @@ import PaginationControls from "../PaginationControls";
 import UserEmail from "../UserEmail";
 
 const QUERY = graphql(/* GraphQL */ `
-  query UserEmailListQuery(
+  query UserEmailList(
     $userId: ID!
     $first: Int
     $after: String
@@ -48,7 +49,7 @@ const QUERY = graphql(/* GraphQL */ `
   }
 `);
 
-const FRAGMENT = graphql(/* GraphQL */ `
+export const FRAGMENT = graphql(/* GraphQL */ `
   fragment UserEmailList_user on User {
     id
     primaryEmail {
@@ -57,9 +58,8 @@ const FRAGMENT = graphql(/* GraphQL */ `
   }
 `);
 
-const CONFIG_FRAGMENT = graphql(/* GraphQL */ `
+export const CONFIG_FRAGMENT = graphql(/* GraphQL */ `
   fragment UserEmailList_siteConfig on SiteConfig {
-    id
     ...UserEmail_siteConfig
   }
 `);
@@ -73,13 +73,20 @@ const UserEmailList: React.FC<{
   const [pending, startTransition] = useTransition();
 
   const [pagination, setPagination] = usePagination();
-  const [result, refreshList] = useQuery({
-    query: QUERY,
-    variables: { userId: data.id, ...pagination },
+  const result = useSuspenseQuery({
+    queryKey: ["userEmails", pagination],
+    queryFn: ({ signal }) =>
+      graphqlRequest({
+        query: QUERY,
+        variables: {
+          userId: data.id,
+          ...(pagination as AnyPagination),
+        },
+        signal,
+      }),
   });
-  if (result.error) throw result.error;
-  const emails = result.data?.user?.emails;
-  if (!emails) throw new Error(); // Suspense mode is enabled
+  const emails = result.data.user?.emails;
+  if (!emails) throw new Error();
 
   const [prevPage, nextPage] = usePages(pagination, emails.pageInfo);
 
@@ -91,11 +98,10 @@ const UserEmailList: React.FC<{
     });
   };
 
-  // When removing an email, we want to refresh the list and go back to the first page
+  // When removing an email, we want to go back to the first page
   const onRemove = (): void => {
     startTransition(() => {
       setPagination(FIRST_PAGE);
-      refreshList();
     });
   };
 

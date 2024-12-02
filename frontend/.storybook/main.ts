@@ -7,7 +7,7 @@
 import type { StorybookConfig } from "@storybook/react-vite";
 
 const config: StorybookConfig = {
-  stories: ["../src/**/*.stories.@(js|jsx|ts|tsx)"],
+  stories: ["../{src,stories}/**/*.stories.@(js|jsx|ts|tsx)"],
 
   addons: [
     // Automatic docs pages
@@ -31,6 +31,9 @@ const config: StorybookConfig = {
     // Theme switch toolbar
     "@storybook/addon-toolbars",
 
+    // Interactions
+    "@storybook/addon-interactions",
+
     // i18next integration
     "storybook-react-i18next",
   ],
@@ -47,6 +50,17 @@ const config: StorybookConfig = {
 
   docs: {
     autodocs: true,
+  },
+
+  env: {
+    STORYBOOK: "true",
+  },
+
+  viteFinal: async (config) => {
+    // Host all the assets in the root directory,
+    // so that the service worker is correctly scoped to the root
+    config.build.assetsDir = "";
+    return config;
   },
 };
 

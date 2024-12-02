@@ -6,22 +6,15 @@
 
 // @vitest-environment happy-dom
 
-import { cleanup, render } from "@testing-library/react";
-import { Provider } from "urql";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { never } from "wonka";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { makeFragmentData } from "../../gql";
 import { mockLocale } from "../../test-utils/mockLocale";
-import { DummyRouter } from "../../test-utils/router";
 
+import render from "../../test-utils/render";
 import OAuth2SessionDetail, { FRAGMENT } from "./OAuth2SessionDetail";
 
 describe("<OAuth2SessionDetail>", () => {
-  const mockClient = {
-    executeQuery: (): typeof never => never,
-  };
-
   const baseSession = {
     id: "session-id",
     scope:
@@ -41,17 +34,12 @@ describe("<OAuth2SessionDetail>", () => {
   };
 
   beforeAll(() => mockLocale());
-  afterEach(cleanup);
 
   it("renders session details", () => {
     const data = makeFragmentData(baseSession, FRAGMENT);
 
     const { asFragment, getByText, queryByText } = render(
-      <Provider value={mockClient}>
-        <DummyRouter>
-          <OAuth2SessionDetail session={data} />
-        </DummyRouter>
-      </Provider>,
+      <OAuth2SessionDetail session={data} />,
     );
 
     expect(asFragment()).toMatchSnapshot();
@@ -69,11 +57,7 @@ describe("<OAuth2SessionDetail>", () => {
     );
 
     const { asFragment, getByText, queryByText } = render(
-      <Provider value={mockClient}>
-        <DummyRouter>
-          <OAuth2SessionDetail session={data} />
-        </DummyRouter>
-      </Provider>,
+      <OAuth2SessionDetail session={data} />,
     );
 
     expect(asFragment()).toMatchSnapshot();

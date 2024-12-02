@@ -17,7 +17,7 @@ use rand::Rng;
 use url::Url;
 
 use crate::{
-    error::TokenRequestError, http_service::HttpService, requests::token::request_access_token,
+    error::TokenRequestError, requests::token::request_access_token,
     types::client_credentials::ClientCredentials,
 };
 
@@ -28,7 +28,7 @@ use crate::{
 ///
 /// # Arguments
 ///
-/// * `http_service` - The service to use for making HTTP requests.
+/// * `http_client` - The reqwest client to use for making HTTP requests.
 ///
 /// * `client_credentials` - The credentials obtained when registering the
 ///   client.
@@ -46,7 +46,7 @@ use crate::{
 /// Returns an error if the request fails or the response is invalid.
 #[tracing::instrument(skip_all, fields(token_endpoint))]
 pub async fn access_token_with_client_credentials(
-    http_service: &HttpService,
+    http_client: &reqwest::Client,
     client_credentials: ClientCredentials,
     token_endpoint: &Url,
     scope: Option<Scope>,
@@ -56,7 +56,7 @@ pub async fn access_token_with_client_credentials(
     tracing::debug!("Requesting access token with client credentials...");
 
     request_access_token(
-        http_service,
+        http_client,
         client_credentials,
         token_endpoint,
         AccessTokenRequest::ClientCredentials(ClientCredentialsGrant { scope }),

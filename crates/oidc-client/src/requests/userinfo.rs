@@ -10,23 +10,17 @@
 
 use std::collections::HashMap;
 
-use bytes::Bytes;
-use headers::{Authorization, ContentType, HeaderMapExt, HeaderValue};
+use headers::{ContentType, HeaderMapExt, HeaderValue};
 use http::header::ACCEPT;
-use mas_http::CatchHttpCodesLayer;
-use mas_jose::claims;
+use mas_http::RequestBuilderExt;
 use mime::Mime;
 use serde_json::Value;
-use tower::{Layer, Service, ServiceExt};
 use url::Url;
 
 use super::jose::JwtVerificationData;
 use crate::{
-    error::{IdTokenError, UserInfoError},
-    http_service::HttpService,
+    error::{IdTokenError, ResponseExt, UserInfoError},
     requests::jose::verify_signed_jwt,
-    types::IdToken,
-    utils::{http_all_error_status_codes, http_error_mapper},
 };
 
 /// Obtain information about an authenticated end-user.
@@ -36,7 +30,7 @@ use crate::{
 ///
 /// # Arguments
 ///
-/// * `http_service` - The service to use for making HTTP requests.
+/// * `http_client` - The reqwest client to use for making HTTP requests.
 ///
 /// * `userinfo_endpoint` - The URL of the issuer's User Info endpoint.
 ///
@@ -59,15 +53,12 @@ use crate::{
 /// [`Claim`]: mas_jose::claims::Claim
 #[tracing::instrument(skip_all, fields(userinfo_endpoint))]
 pub async fn fetch_userinfo(
-    http_service: &HttpService,
+    http_client: &reqwest::Client,
     userinfo_endpoint: &Url,
     access_token: &str,
     jwt_verification_data: Option<JwtVerificationData<'_>>,
-    auth_id_token: &IdToken<'_>,
 ) -> Result<HashMap<String, Value>, UserInfoError> {
     tracing::debug!("Obtaining user info…");
-
-    let mut userinfo_request = http::Request::get(userinfo_endpoint.as_str());
 
     let expected_content_type = if jwt_verification_data.is_some() {
         "application/jwt"
@@ -75,20 +66,15 @@ pub async fn fetch_userinfo(
         mime::APPLICATION_JSON.as_ref()
     };
 
-    if let Some(headers) = userinfo_request.headers_mut() {
-        headers.typed_insert(Authorization::bearer(access_token)?);
-        headers.insert(ACCEPT, HeaderValue::from_static(expected_content_type));
-    }
+    let userinfo_request = http_client
+        .get(userinfo_endpoint.as_str())
+        .bearer_auth(access_token)
+        .header(ACCEPT, HeaderValue::from_static(expected_content_type));
 
-    let userinfo_request = userinfo_request.body(Bytes::new())?;
-
-    let service = CatchHttpCodesLayer::new(http_all_error_status_codes(), http_error_mapper)
-        .layer(http_service.clone());
-
-    let userinfo_response = service
-        .ready_oneshot()
+    let userinfo_response = userinfo_request
+        .send_traced()
         .await?
-        .call(userinfo_request)
+        .error_from_oauth2_error_response()
         .await?;
 
     let content_type: Mime = userinfo_response
@@ -105,29 +91,15 @@ pub async fn fetch_userinfo(
         });
     }
 
-    let response_body = std::str::from_utf8(userinfo_response.body())?;
-
-    let mut claims = if let Some(verification_data) = jwt_verification_data {
-        verify_signed_jwt(response_body, verification_data)
+    let claims = if let Some(verification_data) = jwt_verification_data {
+        let response_body = userinfo_response.text().await?;
+        verify_signed_jwt(&response_body, verification_data)
             .map_err(IdTokenError::from)?
             .into_parts()
             .1
     } else {
-        serde_json::from_str(response_body)?
+        userinfo_response.json().await?
     };
-
-    let mut auth_claims = auth_id_token.payload().clone();
-
-    // Subject identifier must always be the same.
-    let sub = claims::SUB
-        .extract_required(&mut claims)
-        .map_err(IdTokenError::from)?;
-    let auth_sub = claims::SUB
-        .extract_required(&mut auth_claims)
-        .map_err(IdTokenError::from)?;
-    if sub != auth_sub {
-        return Err(IdTokenError::WrongSubjectIdentifier.into());
-    }
 
     Ok(claims)
 }
